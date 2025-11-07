@@ -34,6 +34,7 @@ struct CrawlRequest {
     url: String,
     #[serde(default = "default_depth")]
     depth: u8,
+    max_pages: usize,
 }
 
 fn default_depth() -> u8 {
