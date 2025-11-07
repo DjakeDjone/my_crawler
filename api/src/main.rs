@@ -152,8 +152,8 @@ async fn health_check() -> impl Responder {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let host = env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let port = env::var("PORT").unwrap_or_else(|_| "8000".to_string());
+    let host = env::var("API_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let port = env::var("API_PORT").unwrap_or_else(|_| "8000".to_string());
     let bind_address = format!("{}:{}", host, port);
     let weaviate_url =
         env::var("WEAVIATE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());

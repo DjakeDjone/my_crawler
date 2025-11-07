@@ -2,7 +2,7 @@
 
 ## Base URL
 
-The crawler service runs on `http://localhost:8001` by default (configurable via `HOST` and `PORT` environment variables).
+The crawler service runs on `http://localhost:8001` by default (configurable via `SPIDER_HOST` and `SPIDER_PORT` environment variables).
 
 ## Endpoints
 
@@ -167,9 +167,17 @@ print(f"Crawled {result['pages_crawled']} pages")
 
 ## Environment Variables
 
-- `HOST`: The host to bind the server to (default: `127.0.0.1`)
-- `PORT`: The port to bind the server to (default: `8001`)
+All environment variables can be configured in the `.env` file at the project root. See `PORT_CONFIGURATION.md` for detailed documentation.
+
+- `SPIDER_HOST`: The host to bind the spider server to (default: `127.0.0.1`)
+- `SPIDER_PORT`: The port to bind the spider server to (default: `8001`)
+- `API_HOST`: The host to bind the API server to (default: `127.0.0.1`)
+- `API_PORT`: The port to bind the API server to (default: `8000`)
 - `WEAVIATE_URL`: The URL of the Weaviate instance (default: `http://localhost:8080`)
+- `WEAVIATE_HOST_PORT`: The port to expose Weaviate on (default: `8080`)
+- `WEAVIATE_GRPC_PORT`: The gRPC port for Weaviate (default: `50051`)
+
+For more details on port configuration, run `./show-ports.sh` or see `PORT_CONFIGURATION.md`.
 
 ## Notes
 

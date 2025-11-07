@@ -285,8 +285,8 @@ async fn main() -> std::io::Result<()> {
     // Initialize tracing
     tracing_subscriber::fmt::init();
 
-    let host = env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let port = env::var("PORT").unwrap_or_else(|_| "8001".to_string());
+    let host = env::var("SPIDER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let port = env::var("SPIDER_PORT").unwrap_or_else(|_| "8001".to_string());
     let bind_address = format!("{}:{}", host, port);
     let weaviate_url =
         env::var("WEAVIATE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
