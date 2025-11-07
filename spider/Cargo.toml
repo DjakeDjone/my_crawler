@@ -1,0 +1,27 @@
+[package]
+name = "crawler"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.48.0", features = ["full"] }
+rocksdb = "0.24.0"
+reqwest = { version = "0.12", features = ["cookies"] }
+url = "2.5"
+csv = "1.4"
+notify = "8.2.0"
+scraper = "0.24.0"
+robots_txt = "0.7.0"
+governor = "0.10.1"
+nonzero_ext = "0.3"
+anyhow = "1.0"
+thiserror = "2.0.17"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+futures = "0.3"
+weaviate-community = "0.2.2"
+types = { path = "../types" }
+sha2 = "0.10.9"
+actix-web = "4.11.0"
