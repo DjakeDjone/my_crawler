@@ -183,6 +183,8 @@ async fn crawl(req: web::Json<CrawlRequest>, data: web::Data<AppState>) -> impl 
 }
 
 async fn fetch_page(client: &Client, url: &str) -> Result<String> {
+    println!("Fetching page: {}", url);
+
     let response = client
         .get(url)
         .header("User-Agent", USER_AGENT)
