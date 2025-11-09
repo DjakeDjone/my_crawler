@@ -362,8 +362,7 @@ async fn main() -> std::io::Result<()> {
             }
 
             cors
-        }</parameter>
-
+        };
 
         App::new()
             .wrap(cors)
