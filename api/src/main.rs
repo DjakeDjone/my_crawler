@@ -195,6 +195,7 @@ async fn main() -> std::io::Result<()> {
 
         // Add each origin
         for origin in origins {
+            println!("Allowed origin: {}", origin);
             cors = cors.allowed_origin(origin);
         }
 
