@@ -297,6 +297,8 @@ async fn main() -> std::io::Result<()> {
     let bind_address = format!("{}:{}", host, port);
     let weaviate_url =
         env::var("WEAVIATE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
+    let allowed_origins =
+        env::var("ALLOWED_ORIGINS").unwrap_or_else(|_| "http://localhost:3000".to_string());
 
     // Open RocksDB
     let mut db_opts = Options::default();
@@ -330,11 +332,23 @@ async fn main() -> std::io::Result<()> {
     });
 
     HttpServer::new(move || {
-        let cors = Cors::default()
-            .allow_any_origin()
-            .allow_any_method()
-            .allow_any_header()
+        // Parse allowed origins from comma-separated list
+        let origins: Vec<&str> = allowed_origins.split(',').map(|s| s.trim()).collect();
+
+        let mut cors = Cors::default()
+            .allowed_methods(vec!["GET", "POST", "OPTIONS"])
+            .allowed_headers(vec![
+                actix_web::http::header::CONTENT_TYPE,
+                actix_web::http::header::ACCEPT,
+                actix_web::http::header::AUTHORIZATION,
+            ])
+            .expose_headers(vec![actix_web::http::header::CONTENT_TYPE])
             .max_age(3600);
+
+        // Add each origin
+        for origin in origins {
+            cors = cors.allowed_origin(origin);
+        }
 
         App::new()
             .wrap(cors)
