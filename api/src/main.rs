@@ -1,6 +1,6 @@
 use actix_web::{App, HttpResponse, HttpServer, Responder, web};
 use serde::{Deserialize, Serialize};
-use shared_crawler_api::{WEAVIATE_CLASS_NAME, WebPageData, WebPageResult};
+use shared_crawler_api::{WEAVIATE_CLASS_NAME, WebPageData, WebPageResult, util_fns::load_env};
 use std::env;
 use weaviate_community::{WeaviateClient, collections::query::GetQuery};
 
@@ -152,6 +152,9 @@ async fn health_check() -> impl Responder {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    // Load environment variables from .env file
+    load_env();
+
     let host = env::var("API_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let port = env::var("API_PORT").unwrap_or_else(|_| "8000".to_string());
     let bind_address = format!("{}:{}", host, port);
