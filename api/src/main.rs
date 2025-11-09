@@ -49,7 +49,7 @@ struct AppState {
     weaviate_client: WeaviateClient,
 }
 
-async fn search(query: web::Json<SearchQuery>, data: web::Data<AppState>) -> impl Responder {
+async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> impl Responder {
     // Build the nearText query parameter
     let near_text = format!(r#"{{concepts: ["{}"]}}"#, query.query.replace("\"", "\\\""));
 
@@ -169,7 +169,7 @@ async fn main() -> std::io::Result<()> {
     println!("🚀 Starting API server on http://{}", bind_address);
     println!("📝 Routes:");
     println!("   GET  /health         - Health check");
-    println!("   POST /search         - Search vector database");
+    println!("   GET  /search         - Search vector database");
     println!("   POST /plagiat        - Check text for plagiarism");
     println!();
     println!("🔗 Connected to Weaviate at: {}", weaviate_url);
