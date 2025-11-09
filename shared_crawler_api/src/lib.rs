@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub mod util_fns;
+
 /// The name of the Weaviate class for web pages
 pub const WEAVIATE_CLASS_NAME: &str = "WebPage2";
 
