@@ -300,6 +300,8 @@ async fn main() -> std::io::Result<()> {
     let allowed_origins =
         env::var("ALLOWED_ORIGINS").unwrap_or_else(|_| "http://localhost:3000".to_string());
 
+    println!("🔒 CORS allowed origins: {}", allowed_origins);
+
     // Open RocksDB
     let mut db_opts = Options::default();
     db_opts.create_if_missing(true);
@@ -332,23 +334,36 @@ async fn main() -> std::io::Result<()> {
     });
 
     HttpServer::new(move || {
-        // Parse allowed origins from comma-separated list
-        let origins: Vec<&str> = allowed_origins.split(',').map(|s| s.trim()).collect();
+        let cors = if allowed_origins.trim() == "*" {
+            // Allow any origin
+            Cors::default()
+                .allow_any_origin()
+                .allow_any_method()
+                .allow_any_header()
+                .expose_headers(vec![actix_web::http::header::CONTENT_TYPE])
+                .max_age(3600)
+        } else {
+            // Parse allowed origins from comma-separated list
+            let origins: Vec<&str> = allowed_origins.split(',').map(|s| s.trim()).collect();
 
-        let mut cors = Cors::default()
-            .allowed_methods(vec!["GET", "POST", "OPTIONS"])
-            .allowed_headers(vec![
-                actix_web::http::header::CONTENT_TYPE,
-                actix_web::http::header::ACCEPT,
-                actix_web::http::header::AUTHORIZATION,
-            ])
-            .expose_headers(vec![actix_web::http::header::CONTENT_TYPE])
-            .max_age(3600);
+            let mut cors = Cors::default()
+                .allowed_methods(vec!["GET", "POST", "OPTIONS"])
+                .allowed_headers(vec![
+                    actix_web::http::header::CONTENT_TYPE,
+                    actix_web::http::header::ACCEPT,
+                    actix_web::http::header::AUTHORIZATION,
+                ])
+                .expose_headers(vec![actix_web::http::header::CONTENT_TYPE])
+                .max_age(3600);
 
-        // Add each origin
-        for origin in origins {
-            cors = cors.allowed_origin(origin);
-        }
+            // Add each origin
+            for origin in origins {
+                cors = cors.allowed_origin(origin);
+            }
+
+            cors
+        }</parameter>
+
 
         App::new()
             .wrap(cors)
