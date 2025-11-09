@@ -1,3 +1,4 @@
+use actix_cors::Cors;
 use actix_web::{App, HttpResponse, HttpServer, Responder, web};
 use serde::{Deserialize, Serialize};
 use shared_crawler_api::{WEAVIATE_CLASS_NAME, WebPageData, WebPageResult, util_fns::load_env};
@@ -177,7 +178,14 @@ async fn main() -> std::io::Result<()> {
     let app_state = web::Data::new(AppState { weaviate_client });
 
     HttpServer::new(move || {
+        let cors = Cors::default()
+            .allow_any_origin()
+            .allow_any_method()
+            .allow_any_header()
+            .max_age(3600);
+
         App::new()
+            .wrap(cors)
             .app_data(app_state.clone())
             .route("/health", web::get().to(health_check))
             .route("/search", web::post().to(search))
