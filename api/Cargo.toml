@@ -10,4 +10,4 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 reqwest = { version = "0.12", features = ["json"] }
 weaviate-community = "0.2.2"
-types = { path = "../types" }
+shared_crawler_api = { path = "../shared_crawler_api" }

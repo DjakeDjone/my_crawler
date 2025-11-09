@@ -1,3 +1,3 @@
 [workspace]
-members = ["api", "spider", "types"]
+members = ["api", "spider", "shared_crawler_api"]
 resolver = "2"

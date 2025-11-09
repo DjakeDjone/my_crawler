@@ -1,7 +1,7 @@
 use actix_web::{App, HttpResponse, HttpServer, Responder, web};
 use serde::{Deserialize, Serialize};
+use shared_crawler_api::{WEAVIATE_CLASS_NAME, WebPageData, WebPageResult};
 use std::env;
-use types::{WEAVIATE_CLASS_NAME, WebPageData, WebPageResult};
 use weaviate_community::{WeaviateClient, collections::query::GetQuery};
 
 #[derive(Debug, Deserialize)]

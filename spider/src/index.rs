@@ -1,9 +1,9 @@
 use anyhow::Result;
 use scraper::{Html, Selector};
 use sha2::{Digest, Sha256};
+use shared_crawler_api::{fields, WebPageData, WEAVIATE_CLASS_NAME};
 use std::env;
 use tracing::{error, info, warn};
-use types::{fields, WebPageData, WEAVIATE_CLASS_NAME};
 use weaviate_community::collections::objects::Object;
 use weaviate_community::collections::schema::{Class, Properties, Property};
 use weaviate_community::WeaviateClient;

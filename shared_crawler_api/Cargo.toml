@@ -1,10 +1,10 @@
 [package]
-name = "types"
+name = "shared_crawler_api"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "types"
+name = "shared_crawler_api"
 path = "src/lib.rs"
 
 [dependencies]
