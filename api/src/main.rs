@@ -216,7 +216,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(cors)
             .app_data(app_state.clone())
             .route("/health", web::get().to(health_check))
-            .route("/search", web::post().to(search))
+            .route("/search", web::get().to(search))
             .route("/plagiat", web::post().to(plagiat))
     })
     .bind(&bind_address)?
