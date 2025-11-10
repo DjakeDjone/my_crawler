@@ -1,7 +1,7 @@
 use actix_cors::Cors;
 use actix_web::{App, HttpResponse, HttpServer, Responder, web};
 use serde::{Deserialize, Serialize};
-use shared_crawler_api::{WEAVIATE_CLASS_NAME, WebPageData, WebPageResult, util_fns::load_env};
+use shared_crawler_api::{WEAVIATE_CLASS_NAME, WebPageChunk, WebPageResult, util_fns::load_env};
 use std::env;
 use weaviate_community::{WeaviateClient, collections::query::GetQuery};
 
@@ -54,7 +54,7 @@ async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> im
     let near_text = format!(r#"{{concepts: ["{}"]}}"#, query.query.replace("\"", "\\\""));
 
     // Build the GetQuery using the weaviate-community crate
-    let weaviate_query = GetQuery::builder(WEAVIATE_CLASS_NAME, WebPageData::field_names())
+    let weaviate_query = GetQuery::builder(WEAVIATE_CLASS_NAME, WebPageChunk::field_names())
         .with_limit(query.limit as u32)
         .with_near_text(&near_text)
         .with_additional(vec!["distance"])
@@ -95,7 +95,7 @@ async fn plagiat(req: web::Json<PlagiatRequest>, data: web::Data<AppState>) -> i
     let near_text = format!(r#"{{concepts: ["{}"]}}"#, req.text.replace("\"", "\\\""));
 
     // Build the GetQuery using the weaviate-community crate
-    let weaviate_query = GetQuery::builder(WEAVIATE_CLASS_NAME, WebPageData::field_names())
+    let weaviate_query = GetQuery::builder(WEAVIATE_CLASS_NAME, WebPageChunk::field_names())
         .with_limit(5)
         .with_near_text(&near_text)
         .with_additional(vec!["distance"])

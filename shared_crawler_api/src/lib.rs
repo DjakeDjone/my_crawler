@@ -3,61 +3,62 @@ use serde::{Deserialize, Serialize};
 pub mod util_fns;
 
 /// The name of the Weaviate class for web pages
-pub const WEAVIATE_CLASS_NAME: &str = "WebPage2";
+pub const WEAVIATE_CLASS_NAME: &str = "WebPage";
 
 /// Field names for the WebPage schema
 pub mod fields {
-    pub const URL: &str = "url";
-    pub const TITLE: &str = "title";
+    pub const CHUNK_CONTENT: &str = "chunk_content";
+    pub const CHUNK_HEADING: &str = "chunk_heading";
+    pub const SOURCE_URL: &str = "source_url";
+    pub const PAGE_TITLE: &str = "page_title";
     pub const DESCRIPTION: &str = "description";
-    pub const CONTENT: &str = "content";
-    pub const CONTENT_HASH: &str = "content_hash";
-    pub const SUB_PAGES: &str = "sub_pages";
     pub const CRAWLED_AT: &str = "crawled_at";
 }
 
 /// Shared data structure for web page data
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WebPageData {
-    pub url: String,
-    pub title: String,
+pub struct WebPageChunk {
+    //
+    pub chunk_content: String,
+    pub chunk_heading: Option<String>,
+
+    // for the search results
+    // will be redundant for all chunks of the same page but ok for performance
+    pub source_url: String,
+    pub page_title: String,
     pub description: String,
-    pub content: String,
-    pub content_hash: String,
-    pub sub_pages: Vec<String>,
+
     pub crawled_at: i64,
 }
 
-impl WebPageData {
+impl WebPageChunk {
     /// Create a new WebPageData instance
     pub fn new(
-        url: String,
-        title: String,
+        chunk_content: String,
+        chunk_heading: Option<String>,
+        source_url: String,
+        page_title: String,
         description: String,
-        content_hash: String,
-        content: String,
         crawled_at: i64,
-        sub_pages: Vec<String>,
     ) -> Self {
         Self {
-            url,
-            title,
+            chunk_content,
+            chunk_heading,
+            source_url,
+            page_title,
             description,
-            content_hash,
-            content,
             crawled_at,
-            sub_pages,
         }
     }
 
     /// Get all field names for Weaviate queries
     pub fn field_names() -> Vec<&'static str> {
         vec![
-            fields::URL,
-            fields::TITLE,
+            fields::CHUNK_CONTENT,
+            fields::CHUNK_HEADING,
+            fields::SOURCE_URL,
+            fields::PAGE_TITLE,
             fields::DESCRIPTION,
-            fields::CONTENT,
-            fields::SUB_PAGES,
             fields::CRAWLED_AT,
         ]
     }
@@ -65,12 +66,11 @@ impl WebPageData {
     /// Convert to JSON for Weaviate object creation
     pub fn to_properties_json(&self) -> serde_json::Value {
         serde_json::json!({
-            fields::URL: self.url,
-            fields::TITLE: self.title,
+            fields::CHUNK_CONTENT: self.chunk_content,
+            fields::CHUNK_HEADING: self.chunk_heading,
+            fields::SOURCE_URL: self.source_url,
+            fields::PAGE_TITLE: self.page_title,
             fields::DESCRIPTION: self.description,
-            fields::CONTENT: self.content,
-            fields::CONTENT_HASH: self.content_hash,
-            fields::SUB_PAGES: self.sub_pages.clone(),
             fields::CRAWLED_AT: self.crawled_at,
         })
     }
@@ -78,13 +78,22 @@ impl WebPageData {
     /// Parse from Weaviate response JSON
     pub fn from_weaviate_json(value: &serde_json::Value) -> Option<Self> {
         Some(Self {
-            url: value
-                .get(fields::URL)
+            chunk_content: value
+                .get(fields::CHUNK_CONTENT)
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string(),
-            title: value
-                .get(fields::TITLE)
+            chunk_heading: value
+                .get(fields::CHUNK_HEADING)
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            source_url: value
+                .get(fields::SOURCE_URL)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            page_title: value
+                .get(fields::PAGE_TITLE)
                 .and_then(|v| v.as_str())
                 .unwrap_or("No Title")
                 .to_string(),
@@ -93,23 +102,6 @@ impl WebPageData {
                 .and_then(|v| v.as_str())
                 .unwrap_or("No description available")
                 .to_string(),
-            content_hash: value
-                .get(fields::CONTENT_HASH)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            content: value
-                .get(fields::CONTENT)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            sub_pages: value
-                .get(fields::SUB_PAGES)
-                .and_then(|v| v.as_array())
-                .unwrap_or(&vec![])
-                .iter()
-                .map(|v| v.as_str().unwrap_or("").to_string())
-                .collect(),
             crawled_at: value
                 .get(fields::CRAWLED_AT)
                 .and_then(|v| v.as_i64())
@@ -122,19 +114,18 @@ impl WebPageData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebPageResult {
     #[serde(flatten)]
-    pub data: WebPageData,
+    pub data: WebPageChunk,
     pub score: f32,
 }
 
 impl WebPageResult {
-    /// Create a new WebPageResult from WebPageData and a score
-    pub fn new(data: WebPageData, score: f32) -> Self {
+    pub fn new(data: WebPageChunk, score: f32) -> Self {
         Self { data, score }
     }
 
     /// Parse from Weaviate response JSON with distance
     pub fn from_weaviate_json(value: &serde_json::Value) -> Option<Self> {
-        let data = WebPageData::from_weaviate_json(value)?;
+        let data = WebPageChunk::from_weaviate_json(value)?;
 
         let distance = value
             .get("_additional")
