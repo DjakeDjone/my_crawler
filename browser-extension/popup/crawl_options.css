@@ -1,0 +1,122 @@
+html {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: var(--bg-color);
+    color: var(--text);
+    margin: 0;
+    padding: 0;
+}
+
+main {
+    padding: 1rem;
+    min-width: 20rem;
+}
+
+h1 {
+    font-size: 1.5rem;
+    line-height: 1.25rem;
+    font-weight: 700;
+    margin-top: 0;
+}
+
+.input-container{
+    margin-bottom: 1rem;
+}
+
+label {
+    display: block;
+    margin-bottom: 0.25rem;
+    font-weight: 500;
+}
+
+input[type="text"],
+input[type="number"] {
+    width: 100%;
+    padding: 0.5rem;
+    border: 1px solid var(--blur-bg);
+    border-radius: 4px;
+    background-color: var(--card-bg);
+    color: var(--text);
+    font-size: 1rem;
+    box-sizing: border-box;
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus {
+    outline: 2px solid var(--highlighted);
+    border-color: var(--highlighted);
+}
+
+button {
+    width: 100%;
+    padding: 0.75rem;
+    background-color: var(--highlighted);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+button:hover:not(:disabled) {
+    opacity: 0.9;
+}
+
+button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#status {
+    margin-top: 1rem;
+    padding: 0.5rem;
+    border-radius: 4px;
+    text-align: center;
+    font-weight: 500;
+}
+
+.flex-inputs{
+    display: flex;
+    justify-content: space-between;
+    align-items: start;
+    gap: 1rem;
+}
+
+.flex-inputs > * {
+    width: calc(50% - 0.5rem);
+}
+
+.success {
+    color: var(--success);
+}
+
+.error {
+    color: var(--error);
+}
+
+/* vars */
+:root {
+    --text: #110804;
+    --bg-color: #fcf6f2;
+    --highlighted: #cf6e3f;
+    --secondary: #c6e390;
+    --success: #4bb543;
+    --error: #ff4d4d;
+    --blur-bg: #0000000f;
+    --card-bg: #0000000b;
+}
+
+/* dark mode */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --text: #e3e6e8;
+        --bg-color: #0d0f12;
+        --highlighted: #fd1980;
+        --secondary: #4f46e5;
+        --success: #4bb543;
+        --error: #ff4d4d;
+        --blur-bg: #ffffff0c;
+        --card-bg: #ffffff3f;
+    }
+}
