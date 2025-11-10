@@ -9,6 +9,12 @@ use crate::{REQUEST_TIMEOUT_SECS, USER_AGENT};
 
 pub async fn fetch_page(client: &Client, url: &str) -> Result<String> {
     println!("Fetching page: {}", url);
+    // add 'http:// or 'https:// to the URL if it doesn't start with one
+    let url = if !url.starts_with("http://") && !url.starts_with("https://") {
+        format!("https://{}", url)
+    } else {
+        url.to_string()
+    };
 
     let response = client
         .get(url)
@@ -94,24 +100,16 @@ pub fn extract_links(html_content: &str, base_url: &Url) -> Vec<String> {
     }
 
     // Remove duplicates
-    // first strip 'www.' and 'http(s)://' from the beginning of the URL
-    links.iter_mut().for_each(|url| {
-        if url.starts_with("http://") {
-            *url = url.replacen("http://", "", 1);
-        } else if url.starts_with("https://") {
-            *url = url.replacen("https://", "", 1);
-        }
+    // Normalize URLs by removing protocol and trailing slash
+    links = links.into_iter().map(|url| normalize_url(&url)).collect();
 
-        if url.starts_with("www.") {
-            *url = url.replacen("www.", "", 1);
-        }
-
-        // ends with '/'
-        if url.ends_with('/') {
-            *url = url.strip_suffix('/').unwrap_or(url).to_owned();
-        }
-    });
     links.sort();
     links.dedup();
     links
+}
+
+pub fn normalize_url(url: &str) -> String {
+    url.trim_end_matches('/').to_owned()
+    // .replace("https://", "")
+    // .replace("http://", "")
 }

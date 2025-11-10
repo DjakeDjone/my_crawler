@@ -9,6 +9,8 @@ use weaviate_community::collections::objects::Object;
 use weaviate_community::collections::schema::{Class, Properties, Property};
 use weaviate_community::WeaviateClient;
 
+use crate::extractor::{extract_description, extract_title};
+
 const MIN_CHUNK_TOKENS: usize = 300;
 const MAX_CHUNK_TOKENS: usize = 700;
 
@@ -20,9 +22,9 @@ fn estimate_tokens(text: &str) -> usize {
 
 /// Represents a content block with optional heading
 #[derive(Debug, Clone)]
-struct ContentBlock {
-    heading: Option<String>,
-    text: String,
+pub struct ContentBlock {
+    pub heading: Option<String>,
+    pub text: String,
 }
 
 /// Extract structured content blocks from HTML
@@ -70,6 +72,8 @@ fn extract_blocks_from_element(
 ) -> Vec<ContentBlock> {
     let mut blocks = Vec::new();
     let mut current_heading: Option<String> = None;
+    // println!("extracting content blocks for {}", element.value().name());
+    // println!("skipping: {:?}", exclude_selector);
 
     // Process children in order
     for child in element.children() {
@@ -77,9 +81,11 @@ fn extract_blocks_from_element(
             let tag_name = child_element.value().name();
 
             // Skip excluded elements
-            if child_element.select(exclude_selector).next().is_some() {
-                continue;
-            }
+            // if child_element.select(exclude_selector).next().is_some() {
+            //     println!("Skipping excluded element: {}", tag_name);
+            //     println!("Because it's excluded: {:?}", child_element);
+            //     continue;
+            // }
 
             // headings
             if tag_name.starts_with('h') && tag_name.len() == 2 {
@@ -106,6 +112,26 @@ fn extract_blocks_from_element(
             {
                 let sub_blocks = extract_blocks_from_element(child_element, exclude_selector);
                 blocks.extend(sub_blocks);
+            } else if tag_name == "ul" || tag_name == "ol" {
+                let sub_blocks = extract_blocks_from_element(child_element, exclude_selector);
+                blocks.extend(sub_blocks);
+            } else if tag_name == "table" {
+                let sub_blocks = extract_blocks_from_element(child_element, exclude_selector);
+                blocks.extend(sub_blocks);
+            } else if tag_name == "pre" {
+                let sub_blocks = extract_blocks_from_element(child_element, exclude_selector);
+                blocks.extend(sub_blocks);
+            } else if tag_name == "blockquote" {
+                let sub_blocks = extract_blocks_from_element(child_element, exclude_selector);
+                blocks.extend(sub_blocks);
+            } else {
+                let text = child_element.text().collect::<String>().trim().to_string();
+                if !text.is_empty() {
+                    blocks.push(ContentBlock {
+                        heading: current_heading.clone(),
+                        text,
+                    });
+                }
             }
         }
     }
@@ -190,8 +216,10 @@ fn create_chunks(
 
         // Check if adding this block would exceed MAX_CHUNK_TOKENS
         if current_tokens + block_tokens > MAX_CHUNK_TOKENS {
-            // Save current chunk if it meets minimum requirements
-            if current_tokens >= MIN_CHUNK_TOKENS && !current_chunk_text.is_empty() {
+            // If there's already accumulated content, flush it to start a new chunk.
+            // Previously we only flushed when the accumulated chunk met the MIN_CHUNK_TOKENS,
+            // which could cause us to append a block and exceed MAX_CHUNK_TOKENS.
+            if !current_chunk_text.is_empty() && current_tokens > 0 {
                 chunks.push(WebPageChunk::new(
                     current_chunk_text.trim().to_string(),
                     current_heading.clone(),
@@ -233,7 +261,7 @@ fn create_chunks(
     }
 
     // Save any remaining content
-    if !current_chunk_text.is_empty() && current_tokens >= 50 {
+    if !current_chunk_text.is_empty() {
         chunks.push(WebPageChunk::new(
             current_chunk_text.trim().to_string(),
             current_heading,
@@ -243,7 +271,6 @@ fn create_chunks(
             crawled_at,
         ));
     }
-
     chunks
 }
 
@@ -276,6 +303,7 @@ pub fn extract_webpage_data(url: String, html_content: String) -> Vec<WebPageChu
     let title = extract_title(&document);
 
     let content_blocks = extract_content_blocks(&document);
+    // println!("content blocks: {:?}", content_blocks);
 
     // Generate description from first few blocks if not in meta tags
     let description = extract_description(&document, &content_blocks);
@@ -299,63 +327,6 @@ pub fn extract_webpage_data(url: String, html_content: String) -> Vec<WebPageChu
         )]
     } else {
         chunks
-    }
-}
-
-fn extract_title(document: &Html) -> String {
-    let title_selector = Selector::parse("title").unwrap();
-    document
-        .select(&title_selector)
-        .next()
-        .map(|el| el.text().collect::<String>().trim().to_string())
-        .unwrap_or_else(|| "".to_string())
-}
-
-fn extract_description(document: &Html, content_blocks: &[ContentBlock]) -> String {
-    let meta_selector = Selector::parse("meta[name='description']").unwrap();
-    if let Some(meta) = document.select(&meta_selector).next() {
-        if let Some(content) = meta.value().attr("content") {
-            let desc = content.trim().to_string();
-            if !desc.is_empty() {
-                return desc;
-            }
-        }
-    }
-
-    // Try og:description as fallback
-    let og_desc_selector = Selector::parse("meta[property='og:description']").unwrap();
-    if let Some(meta) = document.select(&og_desc_selector).next() {
-        if let Some(content) = meta.value().attr("content") {
-            let desc = content.trim().to_string();
-            if !desc.is_empty() {
-                return desc;
-            }
-        }
-    }
-
-    // Generate from content blocks
-    let mut description = String::new();
-    let mut word_count = 0;
-
-    for block in content_blocks.iter().take(5) {
-        for word in block.text.split_whitespace() {
-            if word_count >= 100 {
-                break;
-            }
-            description.push_str(word);
-            description.push(' ');
-            word_count += 1;
-        }
-        if word_count >= 100 {
-            break;
-        }
-    }
-
-    let result = description.trim().to_string();
-    if result.is_empty() {
-        "No description available".to_string()
-    } else {
-        result
     }
 }
 

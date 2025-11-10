@@ -10,14 +10,14 @@ use tracing::{error, info, warn};
 use url::Url;
 use weaviate_community::WeaviateClient;
 
-mod index;
-mod web_visitor;
+pub mod extractor;
+pub mod index;
+pub mod web_visitor;
 
 use index::{ensure_schema, index_page_safe_with_client};
 
-use crate::web_visitor::{extract_links, fetch_page};
+use crate::web_visitor::{extract_links, fetch_page, normalize_url};
 
-const DB_PATH: &str = "../database/crawled_urls.db";
 const USER_AGENT: &str = "PoliteWebCrawler";
 const REQUEST_TIMEOUT_SECS: u64 = 30;
 
@@ -29,7 +29,7 @@ struct AppState {
 #[derive(Debug, Deserialize)]
 struct CrawlRequest {
     url: String,
-    #[serde(default = "default_depth")]
+    // #[serde(default = "default_depth")]
     depth: u8,
     max_pages: usize,
 }
@@ -64,7 +64,6 @@ async fn crawl(req: web::Json<CrawlRequest>, data: web::Data<AppState>) -> impl 
         "Received crawl request for URL: {} with depth: {}",
         req.url, req.depth
     );
-
     // Validate URL
     let base_url = match Url::parse(&req.url) {
         Ok(url) => url,
@@ -92,6 +91,7 @@ async fn crawl(req: web::Json<CrawlRequest>, data: web::Data<AppState>) -> impl 
 
     for current_depth in 0..req.depth {
         if urls_to_crawl.is_empty() {
+            println!("No more URLs to crawl");
             break;
         }
 
@@ -99,6 +99,7 @@ async fn crawl(req: web::Json<CrawlRequest>, data: web::Data<AppState>) -> impl 
 
         for url in urls_to_crawl.iter() {
             if crawled_urls.len() >= req.max_pages {
+                println!("Max pages reached");
                 break;
             }
             if crawled_urls.contains(url) {
@@ -126,6 +127,8 @@ async fn crawl(req: web::Json<CrawlRequest>, data: web::Data<AppState>) -> impl 
 
                         if !crawled_urls.contains(link) && is_same_domain(&base_url, link) {
                             next_level_urls.push(link.clone());
+                        } else {
+                            println!("Link already crawled or not on same domain: {}", link);
                         }
                     }
 
@@ -149,6 +152,7 @@ async fn crawl(req: web::Json<CrawlRequest>, data: web::Data<AppState>) -> impl 
         urls_to_crawl = next_level_urls;
 
         if crawled_urls.len() >= req.max_pages {
+            println!("Max pages reached");
             break;
         }
     }
@@ -213,7 +217,6 @@ async fn main() -> std::io::Result<()> {
     println!("   POST /crawl          - Crawl a URL");
     println!();
     println!("🔗 Connected to Weaviate at: {}", weaviate_url);
-    println!("💾 Database path: {}", DB_PATH);
 
     let app_state = web::Data::new(AppState {
         weaviate_client,
