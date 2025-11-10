@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 use shared_crawler_api::{fields, WebPageData, WEAVIATE_CLASS_NAME};
 use std::env;
 use tracing::{error, info, warn};
+use uuid::Uuid;
 use weaviate_community::collections::objects::Object;
 use weaviate_community::collections::schema::{Class, Properties, Property};
 use weaviate_community::WeaviateClient;
@@ -255,6 +256,18 @@ pub async fn ensure_schema(client: &WeaviateClient) -> Result<()> {
     }
 }
 
+/// Generate a deterministic UUID v5 from a URL
+fn generate_uuid_from_url(url: &str) -> Uuid {
+    // Use UUID v5 with a namespace to generate deterministic UUIDs from URLs
+    // Using the URL namespace (6ba7b811-9dad-11d1-80b4-00c04fd430c8)
+    const URL_NAMESPACE: Uuid = Uuid::from_bytes([
+        0x6b, 0xa7, 0xb8, 0x11, 0x9d, 0xad, 0x11, 0xd1, 0x80, 0xb4, 0x00, 0xc0, 0x4f, 0xd4, 0x30,
+        0xc8,
+    ]);
+
+    Uuid::new_v5(&URL_NAMESPACE, url.as_bytes())
+}
+
 /// Index a web page into Weaviate using a provided client
 pub async fn index_page_with_client(
     client: &WeaviateClient,
@@ -270,14 +283,33 @@ pub async fn index_page_with_client(
         page_data.url, page_data.title
     );
 
+    // Generate deterministic UUID from URL
+    let object_id = generate_uuid_from_url(&url);
+
+    // Try to delete existing entry with this UUID (if it exists)
+    match client
+        .objects
+        .delete(WEAVIATE_CLASS_NAME, &object_id, None, None)
+        .await
+    {
+        Ok(_) => {
+            info!("Deleted existing entry for URL: {}", url);
+        }
+        Err(_) => {
+            // Object doesn't exist, which is fine - we'll create it
+        }
+    }
+
     // Prepare the object data using shared types method
     let properties = page_data.to_properties_json();
 
-    // Insert into Weaviate
+    // Insert into Weaviate with deterministic UUID
     match client
         .objects
         .create(
-            &Object::builder(WEAVIATE_CLASS_NAME, properties).build(),
+            &Object::builder(WEAVIATE_CLASS_NAME, properties)
+                .with_id(object_id)
+                .build(),
             None,
         )
         .await

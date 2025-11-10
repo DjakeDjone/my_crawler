@@ -24,5 +24,6 @@ futures = "0.3"
 weaviate-community = "0.2.2"
 shared_crawler_api = { path = "../shared_crawler_api" }
 sha2 = "0.10.9"
+uuid = { version = "1.11", features = ["v5"] }
 actix-web = "4.11.0"
 actix-cors = "0.7.0"
