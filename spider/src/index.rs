@@ -19,9 +19,6 @@ pub fn extract_webpage_data(
     // Extract title
     let title = extract_title(&document);
 
-    // Extract meta description
-    let description = extract_description(&document);
-
     // Extract main text content
     let content = extract_content(&document);
     let content_hash = {
@@ -29,6 +26,9 @@ pub fn extract_webpage_data(
         hasher.update(&content);
         format!("{:x}", hasher.finalize())
     };
+
+    // Extract meta description
+    let description = extract_description(&document, &content);
 
     // Get current timestamp
     let crawled_at = std::time::SystemTime::now()
@@ -56,7 +56,7 @@ fn extract_title(document: &Html) -> String {
         .unwrap_or_else(|| "No Title".to_string())
 }
 
-fn extract_description(document: &Html) -> String {
+fn extract_description(document: &Html, content: &str) -> String {
     let meta_selector = Selector::parse("meta[name='description']").unwrap();
     if let Some(meta) = document.select(&meta_selector).next() {
         if let Some(content) = meta.value().attr("content") {
@@ -72,7 +72,14 @@ fn extract_description(document: &Html) -> String {
         }
     }
 
-    "No description available".to_string()
+    // generate from content
+    let mut description = String::new();
+    let words = content.split_whitespace().take(100);
+    for word in words {
+        description.push_str(word);
+        description.push(' ');
+    }
+    description.trim().to_string()
 }
 
 fn extract_content(document: &Html) -> String {
