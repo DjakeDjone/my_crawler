@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use scraper::{ElementRef, Html, Selector};
 
 use crate::index::ContentBlock;
@@ -11,7 +13,7 @@ pub fn extract_title(document: &Html) -> String {
         .unwrap_or_else(|| "".to_string())
 }
 
-pub fn extract_description(document: &Html) -> String {
+pub fn extract_description(document: &Html, content_blocks: &Vec<ContentBlock>) -> String {
     let max_length = 247;
     let meta_selector = Selector::parse("meta[name='description']").unwrap();
     if let Some(meta) = document.select(&meta_selector).next() {
@@ -34,11 +36,19 @@ pub fn extract_description(document: &Html) -> String {
         }
     }
 
-    let desc_tag_priority = Selector::parse("p, h3, h2, h1, div").unwrap();
-    let desc_tag_exclude = Selector::parse("script, style, nav, footer, aside, header").unwrap();
-
-    let description =
-        get_content_by_priority_tag(document, &desc_tag_priority, &desc_tag_exclude, 100);
+    let description = content_blocks
+        .iter()
+        .map(|f| {
+            if f.heading.is_none() {
+                f.text.clone()
+            } else if f.text.is_empty() {
+                f.heading.clone().unwrap()
+            } else {
+                format!("{}: {}", f.heading.clone().unwrap(), f.text)
+            }
+        })
+        .collect::<Vec<String>>()
+        .join("\n");
 
     let mut result = description
         .trim()
@@ -51,57 +61,16 @@ pub fn extract_description(document: &Html) -> String {
         result.push_str("...");
     }
     if result.is_empty() {
-        "No description available".to_string()
+        "".to_string()
     } else {
         result
     }
 }
 
-pub fn get_content_by_priority_tag(
-    document: &Html,
-    prefered_tags: &Selector,
-    exclude_selector: &Selector,
-    min_content_length: usize,
-) -> String {
-    let mut collected: Vec<String> = Vec::new();
-    let mut accumulated_len: usize = 0;
-
-    // document.select yields elements in document order, so we preserve appearance order
-    for el in document.select(&prefered_tags) {
-        let text = el.text().collect::<String>().trim().to_string();
-        if text.is_empty() {
-            continue;
-        }
-
-        // Skip if element is inside an excluded ancestor
-        let mut in_excluded = false;
-        for ancestor in el.ancestors() {
-            if let Some(anc_el) = ElementRef::wrap(ancestor) {
-                if exclude_selector.matches(&anc_el) {
-                    in_excluded = true;
-                    break;
-                }
-            }
-        }
-        if in_excluded {
-            continue;
-        }
-
-        // Add the text block
-        collected.push(text.clone());
-        accumulated_len += text.len();
-
-        // Stop once we've reached the requested minimum content length
-        if accumulated_len >= min_content_length {
-            break;
-        }
-    }
-
-    collected.join("\n")
-}
-
 #[cfg(test)]
 mod tests {
+    use crate::extractor_content::extract_content_blocks;
+
     use super::*;
 
     #[test]
@@ -122,69 +91,11 @@ mod tests {
 
         let document = Html::parse_document(html);
 
-        assert_eq!(extract_description(&document), "This is a test page");
-    }
+        let content_blocks = extract_content_blocks(&document);
 
-    #[test]
-    fn test_get_content_by_priority_tag() {
-        let html = r#"
-            <html>
-                <head>
-                    <title>Test Page</title>
-                </head>
-                <body>
-                    <h1>This is a heading</h1>
-                    <pre lang="rust">
-                        <code>
-                            println!("Hello, world!");
-                        </code>
-                    </pre>
-                    <p>This is some content</p>
-                </body>
-            </html>
-        "#;
-
-        let document = Html::parse_document(html);
-        let prio_tags = Selector::parse("h1, p").unwrap();
-        let exclude_selector = Selector::parse("doesnotexist").unwrap();
-        let content_blocks =
-            get_content_by_priority_tag(&document, &prio_tags, &exclude_selector, 25);
-        assert_eq!(content_blocks, "This is a heading\nThis is some content");
-    }
-
-    #[test]
-    fn test_get_content_by_priority_tag_with_nested_tags() {
-        let html = r#"
-            <html>
-                <head>
-                    <title>Test Page</title>
-                </head>
-                <body>
-                    <h1>This is a heading</h1>
-                    <nav>
-                        <ul>
-                            <li>Item 1</li>
-                            <li>Item 2</li>
-                        </ul>
-                        <p>
-                            This should not be included
-                        </p>
-                    </nav>
-                    <pre lang="rust">
-                        <code>
-                            println!("Hello, world!");
-                        </code>
-                    </pre>
-                    <p>This is some content</p>
-                </body>
-            </html>
-        "#;
-
-        let document = Html::parse_document(html);
-        let prio_tags = Selector::parse("h1, p").unwrap();
-        let exclude_selector = Selector::parse("nav").unwrap();
-        let content_blocks =
-            get_content_by_priority_tag(&document, &prio_tags, &exclude_selector, 100);
-        assert_eq!(content_blocks, "This is a heading\nThis is some content");
+        assert_eq!(
+            extract_description(&document, &content_blocks),
+            "This is a test page"
+        );
     }
 }

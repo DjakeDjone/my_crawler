@@ -190,7 +190,7 @@ pub fn extract_webpage_data(url: String, html_content: String) -> Vec<WebPageChu
     // println!("content blocks: {:?}", content_blocks);
 
     // Generate description from first few blocks if not in meta tags
-    let description = extract_description(&document);
+    let description = extract_description(&document, &content_blocks);
 
     let crawled_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
