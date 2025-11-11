@@ -11,12 +11,17 @@ use url::Url;
 use weaviate_community::WeaviateClient;
 
 pub mod extractor;
+pub mod extractor_content;
 pub mod index;
+pub mod weaviate;
 pub mod web_visitor;
 
-use index::{ensure_schema, index_page_safe_with_client};
+use weaviate::ensure_schema;
 
-use crate::web_visitor::{extract_links, fetch_page, normalize_url};
+use crate::{
+    weaviate::index_page_safe_with_client,
+    web_visitor::{extract_links, fetch_page},
+};
 
 const USER_AGENT: &str = "PoliteWebCrawler";
 const REQUEST_TIMEOUT_SECS: u64 = 30;
