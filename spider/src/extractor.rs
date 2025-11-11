@@ -1,4 +1,4 @@
-use scraper::{Html, Selector};
+use scraper::{ElementRef, Html, Selector};
 
 use crate::index::ContentBlock;
 
@@ -34,9 +34,11 @@ pub fn extract_description(document: &Html) -> String {
         }
     }
 
-    let desc_tag_priority = ["p", "h3", "h2", "h1", "div"];
+    let desc_tag_priority = Selector::parse("p, h3, h2, h1, div").unwrap();
+    let desc_tag_exclude = Selector::parse("script, style, nav, footer, aside, header").unwrap();
 
-    let description = get_content_by_priority_tag(document, &desc_tag_priority.to_vec(), 100);
+    let description =
+        get_content_by_priority_tag(document, &desc_tag_priority, &desc_tag_exclude, 100);
 
     let mut result = description
         .trim()
@@ -57,28 +59,31 @@ pub fn extract_description(document: &Html) -> String {
 
 pub fn get_content_by_priority_tag(
     document: &Html,
-    prefered_tags: &Vec<&str>,
+    prefered_tags: &Selector,
+    exclude_selector: &Selector,
     min_content_length: usize,
 ) -> String {
-    // important: keep the order
-    if prefered_tags.is_empty() {
-        return "".to_string();
-    }
-
-    // Build a selector that matches any of the preferred tags, e.g. "p, h1"
-    let selector_str = prefered_tags.join(", ");
-    let selector = match Selector::parse(&selector_str) {
-        Ok(s) => s,
-        Err(_) => return "".to_string(),
-    };
-
     let mut collected: Vec<String> = Vec::new();
     let mut accumulated_len: usize = 0;
 
     // document.select yields elements in document order, so we preserve appearance order
-    for el in document.select(&selector) {
+    for el in document.select(&prefered_tags) {
         let text = el.text().collect::<String>().trim().to_string();
         if text.is_empty() {
+            continue;
+        }
+
+        // Skip if element is inside an excluded ancestor
+        let mut in_excluded = false;
+        for ancestor in el.ancestors() {
+            if let Some(anc_el) = ElementRef::wrap(ancestor) {
+                if exclude_selector.matches(&anc_el) {
+                    in_excluded = true;
+                    break;
+                }
+            }
+        }
+        if in_excluded {
             continue;
         }
 
@@ -140,8 +145,46 @@ mod tests {
         "#;
 
         let document = Html::parse_document(html);
-        let prio_tags = vec!["p", "h1"];
-        let content_blocks = get_content_by_priority_tag(&document, &prio_tags, 25);
+        let prio_tags = Selector::parse("h1, p").unwrap();
+        let exclude_selector = Selector::parse("doesnotexist").unwrap();
+        let content_blocks =
+            get_content_by_priority_tag(&document, &prio_tags, &exclude_selector, 25);
+        assert_eq!(content_blocks, "This is a heading\nThis is some content");
+    }
+
+    #[test]
+    fn test_get_content_by_priority_tag_with_nested_tags() {
+        let html = r#"
+            <html>
+                <head>
+                    <title>Test Page</title>
+                </head>
+                <body>
+                    <h1>This is a heading</h1>
+                    <nav>
+                        <ul>
+                            <li>Item 1</li>
+                            <li>Item 2</li>
+                        </ul>
+                        <p>
+                            This should not be included
+                        </p>
+                    </nav>
+                    <pre lang="rust">
+                        <code>
+                            println!("Hello, world!");
+                        </code>
+                    </pre>
+                    <p>This is some content</p>
+                </body>
+            </html>
+        "#;
+
+        let document = Html::parse_document(html);
+        let prio_tags = Selector::parse("h1, p").unwrap();
+        let exclude_selector = Selector::parse("nav").unwrap();
+        let content_blocks =
+            get_content_by_priority_tag(&document, &prio_tags, &exclude_selector, 100);
         assert_eq!(content_blocks, "This is a heading\nThis is some content");
     }
 }
