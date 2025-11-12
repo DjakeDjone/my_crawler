@@ -1,36 +1,42 @@
 {
-    "manifest_version": 2,
+    "manifest_version": 3,
     "name": "Söker-Crawler",
     "version": "1.0",
     "description": "Indexes all visited pages to the Söker search engine.",
-    "icons": {
-        "48": "icons/crawler-48.png"
-    },
-    "content_scripts": [
-        {
-            "matches": [
-                "<all_urls>"
-            ],
-            "js": [
-                "crawler.js"
-            ]
-        }
-    ],
-    "permissions": [
-        "<all_urls>"
-    ],
-    "browser_action": {
-        "default_icon": {
-            "48": "icons/crawler-48.png"
-        },
-        "default_title": "Whereami?",
-        "default_popup": "popup/crawl_options.html"
-    },
     "browser_specific_settings": {
         "gecko": {
+            "id": "soker-crawler@fri3dl.dev",
             "data_collection_permissions": {
-                "required": ["browsingActivity"]
+                "required": [
+                    "browsingActivity",
+                    "websiteContent",
+                    "websiteActivity"
+                ],
+                "optional": [
+                    "technicalAndInteraction"
+                ]
             }
         }
+    },
+    "icons": {
+        "48": "icons/crawler-48.png",
+        "512": "icons/crawler-512.png"
+    },
+    "permissions": [
+        "activeTab"
+    ],
+    "host_permissions": [
+        "https://api.search.fri3dl.dev/*"
+    ],
+    "action": {
+        "default_icon": {
+            "48": "icons/crawler-48.png",
+            "512": "icons/crawler-512.png"
+        },
+        "default_title": "Söker-Crawler",
+        "default_popup": "popup/crawl_options.html"
+    },
+    "content_security_policy": {
+        "extension_pages": "script-src 'self'; object-src 'self'"
     }
 }

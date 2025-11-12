@@ -33,10 +33,8 @@ const crawl = async (url, depth, maxPages) => {
 }
 
 // Get current tab URL and populate input
-// Support both Chrome and Firefox
-const browserAPI = typeof browser !== 'undefined' ? browser : chrome;
-
-browserAPI.tabs.query({ active: true, currentWindow: true }).then(tabs => {
+// Manifest V3 compatible
+chrome.tabs.query({ active: true, currentWindow: true }).then(tabs => {
     const currentTab = tabs[0];
     if (currentTab && currentTab.url) {
         document.getElementById('url-input').value = currentTab.url;

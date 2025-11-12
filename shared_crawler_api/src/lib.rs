@@ -12,6 +12,7 @@ pub mod fields {
     pub const SOURCE_URL: &str = "source_url";
     pub const PAGE_TITLE: &str = "page_title";
     pub const DESCRIPTION: &str = "description";
+    pub const SCORE: &str = "score";
     pub const CRAWLED_AT: &str = "crawled_at";
 }
 
@@ -28,6 +29,7 @@ pub struct WebPageChunk {
     pub page_title: String,
     pub description: String,
 
+    pub score: f64,
     pub crawled_at: i64,
 }
 
@@ -39,6 +41,7 @@ impl WebPageChunk {
         source_url: String,
         page_title: String,
         description: String,
+        score: f64,
         crawled_at: i64,
     ) -> Self {
         Self {
@@ -47,6 +50,7 @@ impl WebPageChunk {
             source_url,
             page_title,
             description,
+            score,
             crawled_at,
         }
     }
@@ -59,6 +63,7 @@ impl WebPageChunk {
             fields::SOURCE_URL,
             fields::PAGE_TITLE,
             fields::DESCRIPTION,
+            fields::SCORE,
             fields::CRAWLED_AT,
         ]
     }
@@ -71,6 +76,7 @@ impl WebPageChunk {
             fields::SOURCE_URL: self.source_url,
             fields::PAGE_TITLE: self.page_title,
             fields::DESCRIPTION: self.description,
+            fields::SCORE: self.score,
             fields::CRAWLED_AT: self.crawled_at,
         })
     }
@@ -102,6 +108,10 @@ impl WebPageChunk {
                 .and_then(|v| v.as_str())
                 .unwrap_or("No description available")
                 .to_string(),
+            score: value
+                .get(fields::SCORE)
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0),
             crawled_at: value
                 .get(fields::CRAWLED_AT)
                 .and_then(|v| v.as_i64())
