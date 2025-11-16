@@ -7,36 +7,59 @@ use url::Url;
 
 use crate::{REQUEST_TIMEOUT_SECS, USER_AGENT};
 
-pub async fn fetch_page(client: &Client, url: &str) -> Result<String> {
-    println!("Fetching page: {}", url);
-    // add 'http:// or 'https:// to the URL if it doesn't start with one
-    let url = if !url.starts_with("http://") && !url.starts_with("https://") {
-        format!("https://{}", url)
-    } else {
-        url.to_string()
-    };
+pub trait WebVisitor {
+    fn fetch_page(&self, url: &str) -> impl std::future::Future<Output = Result<String>>;
+}
 
-    let response = client
-        .get(url)
-        .header("User-Agent", USER_AGENT)
-        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
-        .send()
-        .await
-        .context("Failed to send HTTP request")?;
+pub struct WebVisitorImpl {
+    client: Client,
+}
 
-    if !response.status().is_success() {
-        return Err(anyhow::anyhow!(
-            "HTTP request failed with status: {}",
-            response.status()
-        ));
+impl WebVisitorImpl {
+    pub fn new() -> Self {
+        let client = Client::builder()
+            .user_agent(USER_AGENT)
+            .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+            .build()
+            .expect("Failed to create HTTP client");
+
+        Self { client }
     }
+}
 
-    let html = response
-        .text()
-        .await
-        .context("Failed to read response body")?;
+impl WebVisitor for WebVisitorImpl {
+    async fn fetch_page(&self, url: &str) -> Result<String> {
+        println!("Fetching page: {}", url);
+        // add 'http:// or 'https:// to the URL if it doesn't start with one
+        let url = if !url.starts_with("http://") && !url.starts_with("https://") {
+            format!("https://{}", url)
+        } else {
+            url.to_string()
+        };
 
-    Ok(html)
+        let response = self
+            .client
+            .get(url)
+            .header("User-Agent", USER_AGENT)
+            .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+            .send()
+            .await
+            .context("Failed to send HTTP request")?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!(
+                "HTTP request failed with status: {}",
+                response.status()
+            ));
+        }
+
+        let html = response
+            .text()
+            .await
+            .context("Failed to read response body")?;
+
+        Ok(html)
+    }
 }
 
 pub fn extract_links(html_content: &str, base_url: &Url) -> Vec<String> {
@@ -112,4 +135,12 @@ pub fn normalize_url(url: &str) -> String {
     url.trim_end_matches('/').to_owned()
     // .replace("https://", "")
     // .replace("http://", "")
+}
+
+pub fn get_base_url(url: &str) -> String {
+    let url = url
+        .trim_start_matches("http://")
+        .trim_start_matches("https://");
+    let parts: Vec<&str> = url.split('/').collect();
+    format!("http://{}", parts[0])
 }

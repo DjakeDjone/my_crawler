@@ -12,6 +12,9 @@ pub mod fields {
     pub const SOURCE_URL: &str = "source_url";
     pub const PAGE_TITLE: &str = "page_title";
     pub const DESCRIPTION: &str = "description";
+    pub const TAGS: &str = "tags";
+    pub const CATEGORIES: &str = "categories";
+    pub const PAID: &str = "paid";
     pub const SCORE: &str = "score";
     pub const CRAWLED_AT: &str = "crawled_at";
 }
@@ -29,7 +32,11 @@ pub struct WebPageChunk {
     pub page_title: String,
     pub description: String,
 
-    pub score: f64,
+    pub tags: Vec<String>,       // can be provided by crawl request
+    pub categories: Vec<String>, // set by crawler
+
+    pub paid: f64,  // can be provided by crawl request
+    pub score: f64, // calculated by crawler
     pub crawled_at: i64,
 }
 
@@ -41,6 +48,9 @@ impl WebPageChunk {
         source_url: String,
         page_title: String,
         description: String,
+        tags: Vec<String>,
+        categories: Vec<String>,
+        paid: f64,
         score: f64,
         crawled_at: i64,
     ) -> Self {
@@ -50,6 +60,9 @@ impl WebPageChunk {
             source_url,
             page_title,
             description,
+            tags,
+            categories,
+            paid,
             score,
             crawled_at,
         }
@@ -63,6 +76,9 @@ impl WebPageChunk {
             fields::SOURCE_URL,
             fields::PAGE_TITLE,
             fields::DESCRIPTION,
+            fields::TAGS,
+            fields::CATEGORIES,
+            fields::PAID,
             fields::SCORE,
             fields::CRAWLED_AT,
         ]
@@ -76,6 +92,9 @@ impl WebPageChunk {
             fields::SOURCE_URL: self.source_url,
             fields::PAGE_TITLE: self.page_title,
             fields::DESCRIPTION: self.description,
+            fields::TAGS: self.tags,
+            fields::CATEGORIES: self.categories,
+            fields::PAID: self.paid,
             fields::SCORE: self.score,
             fields::CRAWLED_AT: self.crawled_at,
         })
@@ -108,6 +127,42 @@ impl WebPageChunk {
                 .and_then(|v| v.as_str())
                 .unwrap_or("No description available")
                 .to_string(),
+            tags: value
+                .get(fields::TAGS)
+                .and_then(|v| {
+                    if let Some(arr) = v.as_array() {
+                        Some(
+                            arr.iter()
+                                .filter_map(|i| i.as_str().map(|s| s.to_string()))
+                                .collect::<Vec<String>>(),
+                        )
+                    } else if let Some(s) = v.as_str() {
+                        Some(vec![s.to_string()])
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default(),
+            categories: value
+                .get(fields::CATEGORIES)
+                .and_then(|v| {
+                    if let Some(arr) = v.as_array() {
+                        Some(
+                            arr.iter()
+                                .filter_map(|i| i.as_str().map(|s| s.to_string()))
+                                .collect::<Vec<String>>(),
+                        )
+                    } else if let Some(s) = v.as_str() {
+                        Some(vec![s.to_string()])
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default(),
+            paid: value
+                .get(fields::PAID)
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0),
             score: value
                 .get(fields::SCORE)
                 .and_then(|v| v.as_f64())

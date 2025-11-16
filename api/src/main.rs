@@ -50,13 +50,17 @@ struct AppState {
 }
 
 async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> impl Responder {
-    // Build the nearText query parameter
-    let near_text = format!(r#"{{concepts: ["{}"]}}"#, query.query.replace("\"", "\\\""));
+    // Build the hybrid query parameter (combines vector search with a lexical/text match)
+    // Adjust `alpha` to control weight between vector and lexical scoring (0.0 = only lexical, 1.0 = only vector).
+    let hybrid = format!(
+        r#"{{query: "{}", alpha: 0.5}}"#,
+        query.query.replace("\"", "\\\"")
+    );
 
-    // Build the GetQuery using the weaviate-community crate
+    // Build the GetQuery using the weaviate-community crate, using hybrid search
     let weaviate_query = GetQuery::builder(WEAVIATE_CLASS_NAME, WebPageChunk::field_names())
         .with_limit(query.limit as u32)
-        .with_near_text(&near_text)
+        .with_hybrid(&hybrid)
         .with_additional(vec!["distance"])
         .build();
 
@@ -91,13 +95,17 @@ async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> im
 }
 
 async fn plagiat(req: web::Json<PlagiatRequest>, data: web::Data<AppState>) -> impl Responder {
-    // Build the nearText query parameter
-    let near_text = format!(r#"{{concepts: ["{}"]}}"#, req.text.replace("\"", "\\\""));
+    // Build the hybrid query parameter (combines vector search with a lexical/text match)
+    // Use a moderate alpha so both embedding similarity and lexical matching influence results.
+    let hybrid = format!(
+        r#"{{query: "{}", alpha: 0.5}}"#,
+        req.text.replace("\"", "\\\"")
+    );
 
-    // Build the GetQuery using the weaviate-community crate
+    // Build the GetQuery using the weaviate-community crate, using hybrid search
     let weaviate_query = GetQuery::builder(WEAVIATE_CLASS_NAME, WebPageChunk::field_names())
         .with_limit(5)
-        .with_near_text(&near_text)
+        .with_hybrid(&hybrid)
         .with_additional(vec!["distance"])
         .build();
 

@@ -49,6 +49,10 @@ fn create_chunks(
                     url.to_string(),
                     title.to_string(),
                     description.to_string(),
+                    Vec::new(),
+                    Vec::new(),
+                    0.0,
+                    0.0,
                     crawled_at,
                 ));
                 current_chunk_text.clear();
@@ -72,6 +76,10 @@ fn create_chunks(
                         url.to_string(),
                         title.to_string(),
                         description.to_string(),
+                        Vec::new(),
+                        Vec::new(),
+                        0.0,
+                        0.0,
                         crawled_at,
                     ));
                     sentence_chunk.clear();
@@ -90,6 +98,10 @@ fn create_chunks(
                     url.to_string(),
                     title.to_string(),
                     description.to_string(),
+                    Vec::new(),
+                    Vec::new(),
+                    0.0,
+                    0.0,
                     crawled_at,
                 ));
             }
@@ -110,6 +122,10 @@ fn create_chunks(
                     url.to_string(),
                     title.to_string(),
                     description.to_string(),
+                    Vec::new(),
+                    Vec::new(),
+                    0.0,
+                    0.0,
                     crawled_at,
                 ));
                 current_chunk_text.clear();
@@ -137,6 +153,10 @@ fn create_chunks(
                 url.to_string(),
                 title.to_string(),
                 description.to_string(),
+                Vec::new(),
+                Vec::new(),
+                0.0,
+                0.0,
                 crawled_at,
             ));
             current_chunk_text.clear();
@@ -152,6 +172,10 @@ fn create_chunks(
             url.to_string(),
             title.to_string(),
             description.to_string(),
+            Vec::new(),
+            Vec::new(),
+            0.0,
+            0.0,
             crawled_at,
         ));
     }
@@ -207,6 +231,10 @@ pub fn extract_webpage_data(url: String, html_content: String) -> Vec<WebPageChu
             url,
             title,
             description,
+            Vec::new(),
+            Vec::new(),
+            0.0,
+            0.0,
             crawled_at,
         )]
     } else {

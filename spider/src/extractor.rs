@@ -1,6 +1,4 @@
-use std::collections::HashSet;
-
-use scraper::{ElementRef, Html, Selector};
+use scraper::{Html, Selector};
 
 use crate::index::ContentBlock;
 
