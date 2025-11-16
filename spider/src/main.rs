@@ -1,4 +1,5 @@
 use crate::crawl_loop::CrawlLoop;
+use crate::weaviate::ensure_schema;
 use actix_cors::Cors;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use serde::{Deserialize, Serialize};
@@ -93,6 +94,10 @@ async fn main() -> std::io::Result<()> {
     let weaviate_client = WeaviateClient::builder(&weaviate_url)
         .build()
         .expect("Failed to create Weaviate client");
+
+    ensure_schema(&weaviate_client)
+        .await
+        .expect("Weaviate schema creation failed!");
 
     println!("🚀 Starting Crawler server on http://{}", bind_address);
     println!("📝 Routes:");
