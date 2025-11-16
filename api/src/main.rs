@@ -159,6 +159,57 @@ async fn health_check() -> impl Responder {
     }))
 }
 
+async fn count(_data: web::Data<AppState>) -> impl Responder {
+    // Determine Weaviate base URL from environment (fall back to default)
+    let weaviate_url =
+        env::var("WEAVIATE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
+    let graphql_url = format!("{}/v1/graphql", weaviate_url.trim_end_matches('/'));
+
+    // Construct the GraphQL query to aggregate count for the class
+    let graphql_query = format!(
+        "query {{ Aggregate {{ {} {{ meta {{ count }} }} }} }}",
+        WEAVIATE_CLASS_NAME
+    );
+
+    // Send request
+    let client = reqwest::Client::new();
+    let resp = match client
+        .post(&graphql_url)
+        .json(&serde_json::json!({ "query": graphql_query }))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(ErrorResponse {
+                error: format!("Failed to contact Weaviate GraphQL endpoint: {}", e),
+            });
+        }
+    };
+
+    let json: serde_json::Value = match resp.json().await {
+        Ok(j) => j,
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(ErrorResponse {
+                error: format!("Invalid JSON response from Weaviate: {}", e),
+            });
+        }
+    };
+
+    // Expected shape: { "data": { "Aggregate": { "<ClassName>": [ { "meta": { "count": <n> } } ] } } }
+    let count = json
+        .get("data")
+        .and_then(|d| d.get("Aggregate"))
+        .and_then(|a| a.get(WEAVIATE_CLASS_NAME))
+        .and_then(|arr| arr.get(0))
+        .and_then(|obj| obj.get("meta"))
+        .and_then(|m| m.get("count"))
+        .and_then(|c| c.as_u64())
+        .unwrap_or(0);
+
+    HttpResponse::Ok().json(serde_json::json!({ "count": count }))
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     // Load environment variables from .env file
@@ -179,6 +230,7 @@ async fn main() -> std::io::Result<()> {
     println!("   GET  /health         - Health check");
     println!("   GET  /search         - Search vector database");
     println!("   POST /plagiat        - Check text for plagiarism");
+    println!("   GET  /count          - Document count");
     println!();
     println!("🔗 Connected to Weaviate at: {}", weaviate_url);
 
@@ -226,6 +278,7 @@ async fn main() -> std::io::Result<()> {
             .route("/health", web::get().to(health_check))
             .route("/search", web::get().to(search))
             .route("/plagiat", web::post().to(plagiat))
+            .route("/count", web::get().to(count))
     })
     .bind(&bind_address)?
     .run()

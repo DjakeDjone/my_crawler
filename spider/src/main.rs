@@ -26,7 +26,13 @@ struct AppState {
 pub struct CrawlRequest {
     url: String,
     max_pages: usize,
+    // same domain, per default true
+    #[serde(default = "default_same_domain")]
     same_domain: bool, // if true, only crawl pages from the same root domain will be crawled
+}
+
+fn default_same_domain() -> bool {
+    true
 }
 
 #[derive(Debug, Serialize)]
