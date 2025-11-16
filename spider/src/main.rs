@@ -15,6 +15,7 @@ pub mod extractor_content;
 pub mod index;
 pub mod weaviate;
 pub mod web_visitor;
+pub mod web_visitor_browser;
 
 const USER_AGENT: &str = "PoliteWebCrawler";
 const REQUEST_TIMEOUT_SECS: u64 = 30;

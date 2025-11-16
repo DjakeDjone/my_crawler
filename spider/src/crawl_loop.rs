@@ -18,6 +18,7 @@ use weaviate_community::WeaviateClient;
 
 use crate::{
     web_visitor::{extract_links, get_base_url, normalize_url, WebVisitor, WebVisitorImpl},
+    web_visitor_browser::WebVisitorBrowser,
     CrawlRequest,
 };
 
@@ -25,14 +26,30 @@ pub struct CrawlLoopSettings {
     pub max_rps: u32, // global (not enforced in this simple runner)
     pub max_rps_per_base_url: u32,
     pub max_concurrent_requests: u32,
+
+    // Browser fallback configuration:
+    // If enabled, the crawler will attempt a browser-backed fetch when the
+    // HTTP client returns empty or the page matches lightweight heuristics
+    // that commonly indicate a JS-rendered site.
+    pub browser_fallback_enabled: bool,
+    // Minimum HTML size (bytes) below which we'll consider falling back to the browser.
+    pub browser_fallback_min_html_size: usize,
 }
 
 impl CrawlLoopSettings {
-    pub fn new(max_rps: u32, max_rps_per_base_url: u32, max_concurrent_requests: u32) -> Self {
+    pub fn new(
+        max_rps: u32,
+        max_rps_per_base_url: u32,
+        max_concurrent_requests: u32,
+        browser_fallback_enabled: bool,
+        browser_fallback_min_html_size: usize,
+    ) -> Self {
         CrawlLoopSettings {
             max_rps,
             max_rps_per_base_url,
             max_concurrent_requests,
+            browser_fallback_enabled,
+            browser_fallback_min_html_size,
         }
     }
 
@@ -41,6 +58,10 @@ impl CrawlLoopSettings {
             max_rps: 100,
             max_rps_per_base_url: 10,
             max_concurrent_requests: 4,
+            // enable browser fallback by default; toggle via code or environment if needed
+            browser_fallback_enabled: true,
+            // pages with HTML under this many bytes will be considered for a browser fetch
+            browser_fallback_min_html_size: 1024,
         }
     }
 }
@@ -181,9 +202,88 @@ impl CrawlRunner {
                         }
                     }
 
-                    // Fetch the page
+                    // Fetch the page (try HTTP client first; if it returns empty content or heuristics match,
+                    // fall back to a browser-backed fetch when enabled).
                     match web_visitor.fetch_page(&url).await {
-                        Ok(html) => {
+                        Ok(mut html) => {
+                            // Decide whether to attempt a browser-backed fetch based on settings
+                            let mut try_browser = false;
+                            {
+                                let settings_read = settings.read().await;
+                                if settings_read.browser_fallback_enabled {
+                                    // Empty body -> definitely consider browser fetch
+                                    if html.trim().is_empty() {
+                                        try_browser = true;
+                                    } else {
+                                        // Heuristic: if HTML is very small, or contains markers of client-side rendered apps,
+                                        // prefer a browser fetch to capture hydrated content.
+                                        if html.len() < settings_read.browser_fallback_min_html_size
+                                        {
+                                            try_browser = true;
+                                        } else {
+                                            let html_lower = html.to_lowercase();
+                                            // Common markers for client-side frameworks / JS apps
+                                            if html_lower.contains("<noscript")
+                                                || html_lower.contains("id=\"app\"")
+                                                || html_lower.contains("id=\"root\"")
+                                                || html_lower.contains("data-reactroot")
+                                                || html_lower.contains("__next_data__")
+                                                || html_lower.contains("window.__initial_state__")
+                                                || html_lower.contains(
+                                                    "window.__NEXT_DATA__".to_lowercase().as_str(),
+                                                )
+                                            {
+                                                try_browser = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if try_browser {
+                                tracing::debug!(
+                                    "runner[{}] heuristic/browser fallback triggered for {}",
+                                    id,
+                                    url
+                                );
+
+                                match WebVisitorBrowser::new().fetch_page(&url).await {
+                                    Ok(browser_html) => {
+                                        if !browser_html.trim().is_empty() {
+                                            tracing::info!(
+                                                "runner[{}] browser fetched content for {}",
+                                                id,
+                                                url
+                                            );
+                                            html = browser_html;
+                                        } else {
+                                            tracing::warn!(
+                                                "runner[{}] browser returned empty content for {}",
+                                                id,
+                                                url
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "runner[{}] browser fetch failed for {}: {:?}",
+                                            id,
+                                            url,
+                                            e
+                                        );
+                                    }
+                                }
+                            }
+
+                            if html.trim().is_empty() {
+                                tracing::warn!("runner[{}] fetched empty content for {}", id, url);
+                                // Mark visited to avoid retry storms and count the page as attempted.
+                                pages_crawled += 1;
+                                visited.insert(url.clone(), ());
+                                // Skip parsing links for empty content and continue with next URL.
+                                continue;
+                            }
+
                             tracing::info!("runner[{}] fetched {}", id, url);
                             pages_crawled += 1;
                             visited.insert(url.clone(), ());
