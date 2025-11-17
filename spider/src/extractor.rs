@@ -1,4 +1,5 @@
 use scraper::{Html, Selector};
+use shared_crawler_api::WebPageChunk;
 
 use crate::index::ContentBlock;
 
@@ -63,6 +64,23 @@ pub fn extract_description(document: &Html, content_blocks: &Vec<ContentBlock>) 
     } else {
         result
     }
+}
+
+pub fn calculate_chunk_score(chunk: &WebPageChunk) -> f64 {
+    let mut score = 1.0;
+    // increase score if page has description
+    if chunk.description.len() > 5 {
+        score += 1.0;
+    }
+    let prio_urls = ["wikipedia", "youtube", "reddit"];
+    if prio_urls.iter().any(|url| chunk.source_url.contains(url)) {
+        score += 1.0;
+    }
+    if chunk.source_url.contains("php") {
+        score -= 1.0;
+    }
+
+    score
 }
 
 #[cfg(test)]

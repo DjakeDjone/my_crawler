@@ -3,7 +3,7 @@ use scraper::Html;
 use shared_crawler_api::WebPageChunk;
 
 use crate::{
-    extractor::{extract_description, extract_title},
+    extractor::{calculate_chunk_score, extract_description, extract_title},
     extractor_content::extract_content_blocks,
 };
 
@@ -221,7 +221,12 @@ pub fn extract_webpage_data(url: String, html_content: String) -> Vec<WebPageChu
         .unwrap()
         .as_secs() as i64;
 
-    let chunks = create_chunks(content_blocks, &url, &title, &description, crawled_at);
+    let mut chunks = create_chunks(content_blocks, &url, &title, &description, crawled_at);
+
+    for chunk in &mut chunks {
+        let score = calculate_chunk_score(&chunk);
+        chunk.score = score;
+    }
 
     // If no chunks were created, create a minimal one
     if chunks.is_empty() {
