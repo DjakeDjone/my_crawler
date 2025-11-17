@@ -1,3 +1,415 @@
-<div>
-    <h1>Snake Game</h1>
-</div>
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <title>Snake — Minimal</title>
+        <style>
+            /* very small amount of CSS */
+            html,
+            body {
+                height: 100%;
+                margin: 0;
+                font-family: system-ui, Arial, Helvetica, sans-serif;
+                background: #111;
+                color: #eee;
+            }
+
+            .wrap {
+                height: 100%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                flex-direction: column;
+                gap: 12px;
+            }
+
+            canvas {
+                background: transparent;
+                border: 12px solid #2f6f2f;
+                /* outer frame like the example */
+                display: block;
+                border-radius: 4px;
+            }
+
+            .controls {
+                display: flex;
+                gap: 8px;
+                align-items: center;
+            }
+
+            button {
+                background: #222;
+                color: #eee;
+                border: 1px solid #333;
+                padding: 6px 10px;
+                cursor: pointer;
+            }
+
+            .score {
+                font-weight: 600;
+            }
+        </style>
+    </head>
+
+    <body>
+        <div class="wrap">
+            <canvas
+                id="game"
+                width="400"
+                height="400"
+                aria-label="Snake game"
+            ></canvas>
+            <div class="controls">
+                <div class="score">Score: <span id="score">0</span></div>
+                <button id="start">Start</button>
+                <button id="restart">Restart</button>
+            </div>
+            <small
+                >Use arrow keys or WASD to move. Eat red squares. Avoid walls &
+                yourself.</small
+            >
+        </div>
+
+        <script>
+            // Minimal snake implementation
+            const canvas = document.getElementById("game");
+            const ctx = canvas.getContext("2d");
+            const scoreEl = document.getElementById("score");
+            const startBtn = document.getElementById("start");
+            const restartBtn = document.getElementById("restart");
+
+            const size = 20; // pixel size of each cell (CSS pixels)
+            let cols = 0;
+            let rows = 0;
+
+            // HiDPI / smoothing setup: resize internal canvas to devicePixelRatio
+            function resizeCanvas() {
+                // logical (CSS) size is taken from the canvas attributes (set in HTML)
+                const logicalW =
+                    parseInt(canvas.getAttribute("width"), 10) ||
+                    canvas.clientWidth;
+                const logicalH =
+                    parseInt(canvas.getAttribute("height"), 10) ||
+                    canvas.clientHeight;
+                const dpr = window.devicePixelRatio || 1;
+                // set internal pixel size
+                canvas.width = logicalW * dpr;
+                canvas.height = logicalH * dpr;
+                // keep CSS size
+                canvas.style.width = logicalW + "px";
+                canvas.style.height = logicalH + "px";
+                // scale drawing operations so coordinates are in CSS pixels
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                // enable smoothing
+                ctx.imageSmoothingEnabled = true;
+                ctx.lineJoin = "round";
+                ctx.lineCap = "round";
+
+                cols = Math.floor(logicalW / size);
+                rows = Math.floor(logicalH / size);
+            }
+
+            let snake; // array of segments {x,y}
+            let dir; // {x,y}
+            let apple;
+            let running = false;
+            let tickInterval = 100; // ms (movement duration between grid cells)
+            let timer = null;
+            let rafId = null;
+            let lastTime = null;
+            let accumulator = 0;
+            let prevPositions = null; // previous integer grid positions for interpolation
+            let score = 0;
+
+            function reset() {
+                snake = [
+                    { x: Math.floor(cols / 2), y: Math.floor(rows / 2) },
+                    { x: Math.floor(cols / 2) - 1, y: Math.floor(rows / 2) },
+                ];
+                dir = { x: 1, y: 0 };
+                placeApple();
+                score = 0;
+                scoreEl.textContent = score;
+                running = false;
+                stopLoop();
+                draw();
+            }
+
+            function placeApple() {
+                while (true) {
+                    const a = {
+                        x: Math.floor(Math.random() * cols),
+                        y: Math.floor(Math.random() * rows),
+                    };
+                    if (!snake.some((s) => s.x === a.x && s.y === a.y)) {
+                        apple = a;
+                        break;
+                    }
+                }
+            }
+
+            function start() {
+                if (running) return;
+                running = true;
+                stopLoop();
+                // initialize timing
+                lastTime = performance.now();
+                accumulator = 0;
+                prevPositions = snake.map((s) => ({ x: s.x, y: s.y }));
+                rafId = requestAnimationFrame(loop);
+            }
+
+            function stopLoop() {
+                if (timer) {
+                    clearInterval(timer);
+                    timer = null;
+                }
+                if (rafId) {
+                    cancelAnimationFrame(rafId);
+                    rafId = null;
+                }
+            }
+
+            // perform a discrete tick: advance the logical snake positions by one grid cell
+            function performTick() {
+                // store previous integer positions for interpolation
+                prevPositions = snake.map((s) => ({ x: s.x, y: s.y }));
+
+                // advance snake
+                const head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
+
+                // wall collision
+                if (
+                    head.x < 0 ||
+                    head.y < 0 ||
+                    head.x >= cols ||
+                    head.y >= rows
+                ) {
+                    gameOver();
+                    return;
+                }
+
+                // self collision
+                if (snake.some((s) => s.x === head.x && s.y === head.y)) {
+                    gameOver();
+                    return;
+                }
+
+                snake.unshift(head);
+
+                // apple
+                if (head.x === apple.x && head.y === apple.y) {
+                    score += 1;
+                    scoreEl.textContent = score;
+                    placeApple();
+                } else {
+                    snake.pop();
+                }
+            }
+
+            // main loop using requestAnimationFrame, with an accumulator to trigger ticks
+            function loop(now) {
+                if (!running) return;
+                const dt = now - (lastTime || now);
+                lastTime = now;
+                accumulator += dt;
+
+                // if enough time passed, perform one or more ticks
+                while (accumulator >= tickInterval && running) {
+                    performTick();
+                    accumulator -= tickInterval;
+                }
+
+                // draw interpolated frame
+                drawInterpolated(accumulator / tickInterval);
+
+                rafId = requestAnimationFrame(loop);
+            }
+
+            function gameOver() {
+                running = false;
+                stopLoop();
+                // flash the canvas border briefly
+                canvas.style.borderColor = "#800";
+                setTimeout(() => (canvas.style.borderColor = "#222"), 220);
+            }
+
+            // helper: convert hex -> {r,g,b}
+            function hexToRgb(hex) {
+                const h = hex.replace("#", "");
+                return {
+                    r: parseInt(h.substring(0, 2), 16),
+                    g: parseInt(h.substring(2, 4), 16),
+                    b: parseInt(h.substring(4, 6), 16),
+                };
+            }
+
+            // helper: interpolate two colors (hex) by t in [0,1]
+            function lerpColor(aHex, bHex, t) {
+                const a = hexToRgb(aHex);
+                const b = hexToRgb(bHex);
+                const r = Math.round(a.r + (b.r - a.r) * t);
+                const g = Math.round(a.g + (b.g - a.g) * t);
+                const bl = Math.round(a.b + (b.b - a.b) * t);
+                return `rgb(${r},${g},${bl})`;
+            }
+
+            // draw a green checkerboard background similar to the provided image
+            function drawBackground() {
+                const light = "#cfe98a";
+                const dark = "#bfe06a";
+                for (let y = 0; y < rows; y++) {
+                    for (let x = 0; x < cols; x++) {
+                        ctx.fillStyle = (x + y) % 2 === 0 ? light : dark;
+                        ctx.fillRect(x * size, y * size, size, size);
+                    }
+                }
+            }
+
+            // draw using interpolation between prevPositions and current snake positions
+            function drawInterpolated(t) {
+                // t in [0,1] progress between prevPositions and snake
+                t = Math.max(0, Math.min(1, t || 0));
+
+                // draw background
+                drawBackground();
+
+                // draw apple (small rounded-ish)
+                ctx.fillStyle = "#e33";
+                const ax = apple.x * size + size * 0.12;
+                const ay = apple.y * size + size * 0.12;
+                const aw = size * 0.76;
+                ctx.beginPath();
+                ctx.ellipse(
+                    ax + aw / 2,
+                    ay + aw / 2,
+                    aw / 2,
+                    aw / 2,
+                    0,
+                    0,
+                    Math.PI * 2,
+                );
+                ctx.fill();
+                // tiny leaf
+                ctx.fillStyle = "#2a7a2a";
+                ctx.fillRect(
+                    ax + aw * 0.7,
+                    ay + aw * 0.08,
+                    aw * 0.12,
+                    aw * 0.28,
+                );
+
+                // snake gradient colors (head -> tail)
+                const headColor = "#6ad1ff";
+                const tailColor = "#0b4a8f";
+                const denom = Math.max(1, snake.length - 1);
+
+                // draw snake segments with interpolation and per-segment color interpolation
+                for (let i = 0; i < snake.length; i++) {
+                    const next = snake[i] || snake[snake.length - 1];
+                    // if prevPositions shorter (growth), use last prev for tail
+                    const prev =
+                        prevPositions && prevPositions[i]
+                            ? prevPositions[i]
+                            : prevPositions
+                              ? prevPositions[prevPositions.length - 1]
+                              : next;
+
+                    const ix = prev.x + (next.x - prev.x) * t;
+                    const iy = prev.y + (next.y - prev.y) * t;
+
+                    const segT = denom === 0 ? 0 : i / denom;
+                    ctx.fillStyle = lerpColor(headColor, tailColor, segT);
+
+                    // slightly round segments by drawing a rounded rect (simple approximation)
+                    const px = ix * size + 1;
+                    const py = iy * size + 1;
+                    const w = size - 2;
+                    const h = size - 2;
+                    const r = Math.max(2, Math.min(6, w / 3));
+
+                    ctx.beginPath();
+                    ctx.moveTo(px + r, py);
+                    ctx.arcTo(px + w, py, px + w, py + h, r);
+                    ctx.arcTo(px + w, py + h, px, py + h, r);
+                    ctx.arcTo(px, py + h, px, py, r);
+                    ctx.arcTo(px, py, px + w, py, r);
+                    ctx.closePath();
+                    ctx.fill();
+                }
+            }
+
+            // input handling
+            window.addEventListener("keydown", (ev) => {
+                const key = ev.key;
+                if (
+                    [
+                        "ArrowUp",
+                        "ArrowDown",
+                        "ArrowLeft",
+                        "ArrowRight",
+                        "w",
+                        "a",
+                        "s",
+                        "d",
+                        "W",
+                        "A",
+                        "S",
+                        "D",
+                    ].indexOf(key) === -1
+                )
+                    return;
+                ev.preventDefault();
+                const old = dir;
+                if (key === "ArrowUp" || key === "w" || key === "W") {
+                    if (old.y !== 1) dir = { x: 0, y: -1 };
+                }
+                if (key === "ArrowDown" || key === "s" || key === "S") {
+                    if (old.y !== -1) dir = { x: 0, y: 1 };
+                }
+                if (key === "ArrowLeft" || key === "a" || key === "A") {
+                    if (old.x !== 1) dir = { x: -1, y: 0 };
+                }
+                if (key === "ArrowRight" || key === "d" || key === "D") {
+                    if (old.x !== -1) dir = { x: 1, y: 0 };
+                }
+                // if not running, starting movement should start the game
+                if (!running) start();
+            });
+
+            startBtn.addEventListener("click", () => start());
+            restartBtn.addEventListener("click", () => {
+                reset();
+                start();
+            });
+
+            // init
+            // ensure canvas is sized for high-DPI and cols/rows are set
+            resizeCanvas();
+            // recompute positions and draw initial frame
+            reset();
+
+            // keep canvas crisp when window resizes
+            let resizeTimer = null;
+            window.addEventListener("resize", () => {
+                clearTimeout(resizeTimer);
+                resizeTimer = setTimeout(() => {
+                    const runningBefore = running;
+                    running = false; // pause while resizing
+                    stopLoop();
+                    resizeCanvas();
+                    // reposition apple and snake if out of bounds
+                    // clamp snake segments
+                    snake = snake.map((s) => ({
+                        x: Math.max(0, Math.min(cols - 1, s.x)),
+                        y: Math.max(0, Math.min(rows - 1, s.y)),
+                    }));
+                    placeApple();
+                    drawInterpolated(0);
+                    if (runningBefore) start();
+                }, 120);
+            });
+        </script>
+    </body>
+</html>

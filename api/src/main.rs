@@ -210,6 +210,79 @@ async fn count(_data: web::Data<AppState>) -> impl Responder {
     HttpResponse::Ok().json(serde_json::json!({ "count": count }))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct GetPageRequest {
+    pub url: String,
+}
+
+/// returns all chunks for a given url (sorted)
+async fn get_page(query: web::Query<GetPageRequest>, _data: web::Data<AppState>) -> HttpResponse {
+    // Determine Weaviate base URL from environment (fall back to default)
+    println!("Getting page for {}", query.url);
+    let weaviate_url =
+        env::var("WEAVIATE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
+    let graphql_url = format!("{}/v1/graphql", weaviate_url.trim_end_matches('/'));
+
+    // Escape quotes in the URL for embedding into the GraphQL string
+    let url_escaped = query.url.replace('"', "\\\"");
+
+    // Build GraphQL query: filter by source_url and sort by crawled_at ascending
+    let fields = WebPageChunk::field_names().join(" ");
+    let graphql_query = format!(
+        "query {{ Get {{ {}(where: {{path: \"source_url\", operator: Equal, valueString: \"{}\"}}, sort: [{{path: \"crawled_at\", order: asc}}]) {{ {} }} }} }}",
+        WEAVIATE_CLASS_NAME, url_escaped, fields
+    );
+
+    // Send request
+    let client = reqwest::Client::new();
+    let resp = match client
+        .post(&graphql_url)
+        .json(&serde_json::json!({ "query": graphql_query }))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(ErrorResponse {
+                error: format!("Failed to contact Weaviate GraphQL endpoint: {}", e),
+            });
+        }
+    };
+
+    let json: serde_json::Value = match resp.json().await {
+        Ok(j) => j,
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(ErrorResponse {
+                error: format!("Invalid JSON response from Weaviate: {}", e),
+            });
+        }
+    };
+
+    // Parse results: expected shape { data: { Get: { "<Class>": [ { ... }, ... ] } } }
+    let mut chunks: Vec<WebPageChunk> = Vec::new();
+    if let Some(items) = json
+        .get("data")
+        .and_then(|d| d.get("Get"))
+        .and_then(|g| g.get(WEAVIATE_CLASS_NAME))
+        .and_then(|a| a.as_array())
+    {
+        for item in items {
+            if let Some(chunk) = WebPageChunk::from_weaviate_json(item) {
+                chunks.push(chunk);
+            }
+        }
+    }
+
+    // Ensure stable sort: first by crawled_at asc, then by chunk_content asc
+    chunks.sort_by(|a, b| {
+        a.crawled_at
+            .cmp(&b.crawled_at)
+            .then(a.chunk_content.cmp(&b.chunk_content))
+    });
+
+    HttpResponse::Ok().json(chunks)
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     // Load environment variables from .env file
@@ -231,6 +304,7 @@ async fn main() -> std::io::Result<()> {
     println!("   GET  /search         - Search vector database");
     println!("   POST /plagiat        - Check text for plagiarism");
     println!("   GET  /count          - Document count");
+    println!("   GET  /page           - Get all chunks for a page");
     println!();
     println!("🔗 Connected to Weaviate at: {}", weaviate_url);
 
@@ -279,6 +353,7 @@ async fn main() -> std::io::Result<()> {
             .route("/search", web::get().to(search))
             .route("/plagiat", web::post().to(plagiat))
             .route("/count", web::get().to(count))
+            .route("/page", web::get().to(get_page))
     })
     .bind(&bind_address)?
     .run()
