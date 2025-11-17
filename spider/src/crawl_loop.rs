@@ -66,10 +66,6 @@ impl CrawlLoopSettings {
     }
 }
 
-/// A CrawlRunner that runs in the background and processes CrawlRequests.
-/// It respects a simple per-base-url rate limit by consulting a shared
-/// map of last-request timestamps protected by a mutex. It optionally holds
-/// a Weaviate client (shared via Arc) used to index fetched pages.
 struct CrawlRunner {
     id: usize,
     crawl_requests: Arc<RwLock<HashMap<String, CrawlRequest>>>, // base_url -> req
@@ -100,9 +96,6 @@ impl CrawlRunner {
         }
     }
 
-    /// Spawn the runner background task. The runner will continuously take
-    /// available crawl requests (one at a time) and process them until
-    /// `shutdown` is set to false or there are no requests.
     fn start(&mut self) {
         if self.handle.is_some() {
             // already started
@@ -129,11 +122,7 @@ impl CrawlRunner {
                     break;
                 }
 
-                // Try to pick one crawl request (remove it from the map so other
-                // runners won't pick it concurrently).
                 let maybe_request = {
-                    // Acquire a write lock, pick the first key (if any), remove it and return the removed request.
-                    // Using `keys().next().cloned()` avoids cloning the whole value just to discover a key.
                     let mut map = crawl_requests.write().await;
                     if let Some(key) = map.keys().next().cloned() {
                         map.remove(&key)
@@ -153,7 +142,6 @@ impl CrawlRunner {
 
                 tracing::info!("runner[{}] starting crawl {}", id, crawl_request.url);
 
-                // Perform BFS-like crawl up to max_pages, constrained to the same base_url.
                 let start_base = get_base_url(&crawl_request.url);
                 let mut to_visit: VecDeque<String> = VecDeque::new();
                 let mut visited: HashMap<String, ()> = HashMap::new();
@@ -202,21 +190,15 @@ impl CrawlRunner {
                         }
                     }
 
-                    // Fetch the page (try HTTP client first; if it returns empty content or heuristics match,
-                    // fall back to a browser-backed fetch when enabled).
                     match web_visitor.fetch_page(&url).await {
                         Ok(mut html) => {
-                            // Decide whether to attempt a browser-backed fetch based on settings
                             let mut try_browser = false;
                             {
                                 let settings_read = settings.read().await;
                                 if settings_read.browser_fallback_enabled {
-                                    // Empty body -> definitely consider browser fetch
                                     if html.trim().is_empty() {
                                         try_browser = true;
                                     } else {
-                                        // Heuristic: if HTML is very small, or contains markers of client-side rendered apps,
-                                        // prefer a browser fetch to capture hydrated content.
                                         if html.len() < settings_read.browser_fallback_min_html_size
                                         {
                                             try_browser = true;
@@ -288,13 +270,9 @@ impl CrawlRunner {
                             pages_crawled += 1;
                             visited.insert(url.clone(), ());
 
-                            // If a Weaviate client was provided, index the page asynchronously and safely.
                             if let Some(client_arc) = weaviate_client.as_ref() {
                                 // index_page_safe_with_client expects &WeaviateClient
                                 let client_ref: &WeaviateClient = &*client_arc;
-                                // Call the safe indexing helper (it will log on failure).
-                                // We await here to ensure ordering per page; if you'd prefer
-                                // indexing to happen fully in the background, spawn a task.
                                 crate::weaviate::index_page_safe_with_client(
                                     client_ref,
                                     url.clone(),
@@ -310,10 +288,7 @@ impl CrawlRunner {
                                 let links = extract_links(&html, &base_url_parsed);
 
                                 for link in links.into_iter() {
-                                    // If the crawl request asked to stay on the same domain, enforce that.
-                                    // Otherwise follow any valid links found.
                                     if crawl_request.same_domain {
-                                        // Only follow links on same host (same base URL)
                                         if get_base_url(&link) != start_base {
                                             continue;
                                         }
@@ -347,17 +322,12 @@ impl CrawlRunner {
                     crawl_request.url,
                     pages_crawled
                 );
-
-                // After finishing a crawl we loop back to pick another request.
-            } // end main runner loop
+            }
         });
 
         self.handle = Some(handle);
     }
 
-    /// Stop the background task if it's running. This only signals shutdown;
-    /// the task will exit on its next check. We also abort the task to avoid
-    /// hanging on Drop.
     fn stop(&mut self) {
         self.shutdown.store(false, Ordering::SeqCst);
         if let Some(h) = self.handle.take() {
@@ -366,7 +336,6 @@ impl CrawlRunner {
     }
 }
 
-/// The CrawlLoop orchestrates crawl requests and runners.
 pub struct CrawlLoop {
     crawl_requests: Arc<RwLock<HashMap<String, CrawlRequest>>>,
     settings: Arc<RwLock<CrawlLoopSettings>>,
@@ -388,7 +357,6 @@ impl CrawlLoop {
         }
     }
 
-    /// Optionally attach an existing Weaviate client (shared via Arc) so runners can index pages.
     pub fn set_weaviate_client(&mut self, client: Arc<WeaviateClient>) {
         self.weaviate_client = Some(client);
     }
@@ -401,8 +369,6 @@ impl CrawlLoop {
             .insert(base_url, crawl_request);
     }
 
-    /// Start background runners and return once they've been spawned.
-    /// Runners will keep running until `stop` or `drop`.
     pub async fn run(&mut self) {
         let settings = self.settings.read().await;
         let max_concurrent = settings.max_concurrent_requests as usize;
@@ -425,8 +391,6 @@ impl CrawlLoop {
         tracing::info!("CrawlLoop started {} runners", self.runners.len());
     }
 
-    /// Request a graceful stop. Runners will observe shutdown and stop; we also
-    /// abort their tasks to ensure the process can exit promptly.
     pub fn stop(&mut self) {
         self.shutdown.store(false, Ordering::SeqCst);
         for runner in &mut self.runners {
