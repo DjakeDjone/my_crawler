@@ -32,32 +32,36 @@ Crawl a website starting from a given URL and index the pages into Weaviate.
 ```json
 {
   "url": "https://example.com",
-  "depth": 2
+  "max_pages": 50,
+  "same_domain": true,
+  "use_browser": false,
+  "wait_for_selector": null,
+  "wait_timeout_ms": 5000
 }
 ```
 
 **Parameters:**
 - `url` (string, required): The starting URL to crawl. Must be a valid HTTP/HTTPS URL.
-- `depth` (integer, optional): How deep to crawl. Default is `1`.
-  - `1`: Only crawl the provided URL
-  - `2`: Crawl the URL and all links found on that page
-  - `3`: Crawl the URL, its links, and links found on those pages
-  - And so on...
+- `max_pages` (integer, required): Maximum number of pages to crawl.
+- `same_domain` (boolean, optional): Only crawl pages from the same domain. Default is `true`.
+- `use_browser` (boolean, optional): Force browser-based crawling for JavaScript-heavy sites. Default is `false`.
+- `wait_for_selector` (string, optional): CSS selector to wait for before extracting content. Useful for dynamic SPAs. Default is `null`.
+- `wait_timeout_ms` (integer, optional): Timeout in milliseconds for `wait_for_selector`. Default is `5000`.
+
+**Browser Crawling Notes:**
+- When `use_browser` is `true`, all pages are fetched using a headless Chromium browser
+- When `use_browser` is `false` (default), HTTP client is used with automatic browser fallback for JS-rendered pages
+- The `wait_for_selector` option is useful for SPAs where content loads asynchronously
+- Set environment variable `SPIDER_BROWSER_HEADLESS=false` for debugging in headful mode
 
 **Response (Success):**
 ```json
 {
   "success": true,
-  "message": "Successfully crawled 5 page(s) at depth 2",
-  "pages_crawled": 5,
-  "pages_indexed": 5,
-  "urls": [
-    "https://example.com",
-    "https://example.com/about",
-    "https://example.com/contact",
-    "https://example.com/blog",
-    "https://example.com/services"
-  ]
+  "message": "Queued crawl for https://example.com",
+  "pages_crawled": 0,
+  "pages_indexed": 0,
+  "urls": ["https://example.com"]
 }
 ```
 
@@ -102,28 +106,39 @@ Crawl a website starting from a given URL and index the pages into Weaviate.
 
 - Only HTTP and HTTPS URLs are supported
 - Fragment identifiers (#) in URLs are ignored
-- The crawler does not execute JavaScript, so it only sees static HTML content
-- Very large websites with high depth values may take a long time to crawl
+- By default uses HTTP client; enable `use_browser` for JavaScript-rendered sites
+- Very large websites with high max_pages values may take a long time to crawl
 
 ## Example Usage
 
 ### Using cURL
 
 ```bash
-# Crawl a single page
+# Crawl up to 50 pages starting from example.com
 curl -X POST http://localhost:8001/crawl \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com"}'
+  -d '{"url": "https://example.com", "max_pages": 50}'
 
-# Crawl a page and its immediate links
+# Crawl with browser rendering (for JavaScript-heavy sites)
 curl -X POST http://localhost:8001/crawl \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com", "depth": 2}'
+  -d '{"url": "https://spa-app.com", "max_pages": 20, "use_browser": true}'
 
-# Deep crawl (3 levels)
+# Crawl SPA with selector waiting (wait for content to load)
 curl -X POST http://localhost:8001/crawl \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com", "depth": 3}'
+  -d '{
+    "url": "https://react-app.com",
+    "max_pages": 10,
+    "use_browser": true,
+    "wait_for_selector": "#main-content",
+    "wait_timeout_ms": 10000
+  }'
+
+# Crawl across domains
+curl -X POST http://localhost:8001/crawl \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com", "max_pages": 100, "same_domain": false}'
 ```
 
 ### Using JavaScript/Fetch

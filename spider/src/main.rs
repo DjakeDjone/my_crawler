@@ -24,17 +24,30 @@ struct AppState {
     crawl_loop: Arc<Mutex<CrawlLoop>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct CrawlRequest {
-    url: String,
-    max_pages: usize,
+    pub url: String,
+    pub max_pages: usize,
     // same domain, per default true
     #[serde(default = "default_same_domain")]
-    same_domain: bool, // if true, only crawl pages from the same root domain will be crawled
+    pub same_domain: bool, // if true, only crawl pages from the same root domain will be crawled
+    /// Force browser-based crawling for all pages (bypasses HTTP client)
+    #[serde(default)]
+    pub use_browser: bool,
+    /// CSS selector to wait for before extracting content (e.g., ".main-content")
+    #[serde(default)]
+    pub wait_for_selector: Option<String>,
+    /// Timeout in milliseconds for wait_for_selector (default: 5000)
+    #[serde(default = "default_wait_timeout")]
+    pub wait_timeout_ms: u64,
 }
 
 fn default_same_domain() -> bool {
     true
+}
+
+fn default_wait_timeout() -> u64 {
+    5000
 }
 
 #[derive(Debug, Serialize)]

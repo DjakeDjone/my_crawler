@@ -190,69 +190,99 @@ impl CrawlRunner {
                         }
                     }
 
-                    match web_visitor.fetch_page(&url).await {
+                    // Fetch page using appropriate method based on use_browser flag
+                    let fetch_result: Result<String, anyhow::Error> = if crawl_request.use_browser {
+                        // Direct browser mode - use browser with optional selector waiting
+                        tracing::debug!(
+                            "runner[{}] using browser mode for {}",
+                            id,
+                            url
+                        );
+                        WebVisitorBrowser::new()
+                            .fetch_page_with_options(
+                                &url,
+                                crawl_request.wait_for_selector.as_deref(),
+                                crawl_request.wait_timeout_ms,
+                            )
+                            .await
+                    } else {
+                        // HTTP mode with optional browser fallback
+                        web_visitor.fetch_page(&url).await
+                    };
+
+                    match fetch_result {
                         Ok(mut html) => {
-                            let mut try_browser = false;
-                            {
-                                let settings_read = settings.read().await;
-                                if settings_read.browser_fallback_enabled {
-                                    if html.trim().is_empty() {
-                                        try_browser = true;
-                                    } else {
-                                        if html.len() < settings_read.browser_fallback_min_html_size
-                                        {
+                            // Only apply browser fallback heuristics if NOT in explicit browser mode
+                            if !crawl_request.use_browser {
+                                let mut try_browser = false;
+                                {
+                                    let settings_read = settings.read().await;
+                                    if settings_read.browser_fallback_enabled {
+                                        if html.trim().is_empty() {
                                             try_browser = true;
                                         } else {
-                                            let html_lower = html.to_lowercase();
-                                            // Common markers for client-side frameworks / JS apps
-                                            if html_lower.contains("<noscript")
-                                                || html_lower.contains("id=\"app\"")
-                                                || html_lower.contains("id=\"root\"")
-                                                || html_lower.contains("data-reactroot")
-                                                || html_lower.contains("__next_data__")
-                                                || html_lower.contains("window.__initial_state__")
-                                                || html_lower.contains(
-                                                    "window.__NEXT_DATA__".to_lowercase().as_str(),
-                                                )
+                                            if html.len() < settings_read.browser_fallback_min_html_size
                                             {
                                                 try_browser = true;
+                                            } else {
+                                                let html_lower = html.to_lowercase();
+                                                // Common markers for client-side frameworks / JS apps
+                                                if html_lower.contains("<noscript")
+                                                    || html_lower.contains("id=\"app\"")
+                                                    || html_lower.contains("id=\"root\"")
+                                                    || html_lower.contains("data-reactroot")
+                                                    || html_lower.contains("__next_data__")
+                                                    || html_lower.contains("window.__initial_state__")
+                                                    || html_lower.contains(
+                                                        "window.__NEXT_DATA__".to_lowercase().as_str(),
+                                                    )
+                                                {
+                                                    try_browser = true;
+                                                }
                                             }
                                         }
                                     }
                                 }
-                            }
 
-                            if try_browser {
-                                tracing::debug!(
-                                    "runner[{}] heuristic/browser fallback triggered for {}",
-                                    id,
-                                    url
-                                );
+                                if try_browser {
+                                    tracing::debug!(
+                                        "runner[{}] heuristic/browser fallback triggered for {}",
+                                        id,
+                                        url
+                                    );
 
-                                match WebVisitorBrowser::new().fetch_page(&url).await {
-                                    Ok(browser_html) => {
-                                        if !browser_html.trim().is_empty() {
-                                            tracing::info!(
-                                                "runner[{}] browser fetched content for {}",
-                                                id,
-                                                url
-                                            );
-                                            html = browser_html;
-                                        } else {
+                                    match WebVisitorBrowser::new()
+                                        .fetch_page_with_options(
+                                            &url,
+                                            crawl_request.wait_for_selector.as_deref(),
+                                            crawl_request.wait_timeout_ms,
+                                        )
+                                        .await
+                                    {
+                                        Ok(browser_html) => {
+                                            if !browser_html.trim().is_empty() {
+                                                tracing::info!(
+                                                    "runner[{}] browser fetched content for {}",
+                                                    id,
+                                                    url
+                                                );
+                                                html = browser_html;
+                                            } else {
+                                                tracing::warn!(
+                                                    "runner[{}] browser returned empty content for {}",
+                                                    id,
+                                                    url
+                                                );
+                                            }
+                                        }
+                                        Err(e) => {
                                             tracing::warn!(
-                                                "runner[{}] browser returned empty content for {}",
+                                                "runner[{}] browser fetch failed for {}: {:?}",
                                                 id,
-                                                url
+                                                url,
+                                                e
                                             );
                                         }
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            "runner[{}] browser fetch failed for {}: {:?}",
-                                            id,
-                                            url,
-                                            e
-                                        );
                                     }
                                 }
                             }

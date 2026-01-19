@@ -15,7 +15,7 @@ services:
       - "${WEAVIATE_HOST_PORT:-8080}:${WEAVIATE_INTERNAL_PORT:-8080}"
       - "${WEAVIATE_GRPC_PORT:-50051}:50051"
     volumes:
-      - ${WEAVIATE_DATA_PATH:-./weaviate_data}:/var/lib/weaviate
+      - search-index:/var/lib/weaviate
     restart: on-failure:0
     environment:
       QUERY_DEFAULTS_LIMIT: 25
@@ -38,3 +38,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+
+volumes:
+  search-index:

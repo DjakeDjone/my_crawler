@@ -101,6 +101,18 @@ impl BrowserPool {
     /// Fetch a page using the pooled browser instance.
     /// This mirrors the previous per-call logic but reuses the Browser.
     pub async fn fetch_page(&self, url: &str) -> Result<String> {
+        self.fetch_page_with_options(url, None, 5000).await
+    }
+
+    /// Fetch a page with additional options for waiting on dynamic content.
+    /// - `wait_for_selector`: Optional CSS selector to wait for before extracting content
+    /// - `timeout_ms`: Timeout in milliseconds for the selector wait
+    pub async fn fetch_page_with_options(
+        &self,
+        url: &str,
+        wait_for_selector: Option<&str>,
+        timeout_ms: u64,
+    ) -> Result<String> {
         // Acquire a light mutex if future browser operations need to be sequentialized.
         // Currently Chromium's `new_page` is generally safe to call concurrently, but
         // keeping this allows easy adaptation if we observe races.
@@ -121,6 +133,43 @@ impl BrowserPool {
             .await
             .context("navigation did not complete")?;
 
+        // If a wait_for_selector is specified, wait for that element to appear
+        if let Some(selector) = wait_for_selector {
+            let timeout = std::time::Duration::from_millis(timeout_ms);
+            let start = std::time::Instant::now();
+            
+            loop {
+                // Check if the selector exists in the page
+                let found = page
+                    .evaluate(format!(
+                        "document.querySelector('{}') !== null",
+                        selector.replace('\'', "\\'")
+                    ))
+                    .await
+                    .ok()
+                    .and_then(|v| v.into_value::<bool>().ok())
+                    .unwrap_or(false);
+
+                if found {
+                    tracing::debug!("Selector '{}' found on page {}", selector, url);
+                    break;
+                }
+
+                if start.elapsed() >= timeout {
+                    tracing::warn!(
+                        "Timeout waiting for selector '{}' on page {} (waited {}ms)",
+                        selector,
+                        url,
+                        timeout_ms
+                    );
+                    break;
+                }
+
+                // Small delay before checking again
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        }
+
         let html = page
             .content()
             .await
@@ -138,6 +187,18 @@ impl WebVisitorBrowser {
     pub fn new() -> Self {
         Self {}
     }
+
+    /// Fetch a page with options for waiting on dynamic content.
+    pub async fn fetch_page_with_options(
+        &self,
+        url: &str,
+        wait_for_selector: Option<&str>,
+        timeout_ms: u64,
+    ) -> Result<String> {
+        let pool = BrowserPool::get().await;
+        pool.fetch_page_with_options(url, wait_for_selector, timeout_ms)
+            .await
+    }
 }
 
 impl WebVisitor for WebVisitorBrowser {
@@ -147,3 +208,4 @@ impl WebVisitor for WebVisitorBrowser {
         pool.fetch_page(url).await
     }
 }
+
