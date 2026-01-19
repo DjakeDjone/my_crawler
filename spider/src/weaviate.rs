@@ -126,42 +126,61 @@ pub async fn index_page_with_client(
 
     for (index, chunk) in chunks.iter().enumerate() {
         let object_id = generate_uuid_from_url_and_chunk(&url, index);
-
-        match client
-            .objects
-            .delete(WEAVIATE_CLASS_NAME, &object_id, None, None)
-            .await
-        {
-            Ok(_) => {
-                info!("Deleted existing chunk {} for URL: {}", index, url);
-            }
-            Err(_) => {
-                // Object doesn't exist -> skip deletion
-            }
-        }
-
         let properties = chunk.to_properties_json();
 
-        // Insert into Weaviate with deterministic UUID
-        match client
+        // Insert into Weaviate with deterministic UUID, using upsert semantics
+        let object = Object::builder(WEAVIATE_CLASS_NAME, properties.clone())
+            .with_id(object_id)
+            .build();
+
+        // Perform create and immediately convert error to owned String to avoid Send issues
+        let create_result: Result<_, String> = client
             .objects
-            .create(
-                &Object::builder(WEAVIATE_CLASS_NAME, properties)
-                    .with_id(object_id)
-                    .build(),
-                None,
-            )
+            .create(&object, None)
             .await
-        {
+            .map_err(|e| e.to_string());
+        
+        // Convert to owned data to avoid holding non-Send error across await
+        let result_info: Result<(), (bool, String)> = match create_result {
             Ok(response) => {
                 info!(
                     "Successfully indexed chunk {} for page: {} (ID: {:?})",
                     index, url, response.id
                 );
+                Ok(())
             }
             Err(e) => {
-                error!("Failed to index chunk {} for page {}: {}", index, url, e);
-                return Err(anyhow::anyhow!("Weaviate indexing error: {}", e));
+                let err_str = e.to_string();
+                let is_already_exists = err_str.contains("already exists");
+                Err((is_already_exists, err_str))
+            }
+        };
+
+        // Now handle update case without holding the original error
+        if let Err((is_already_exists, err_str)) = result_info {
+            if is_already_exists {
+                match client
+                    .objects
+                    .update(&properties, WEAVIATE_CLASS_NAME, &object_id, None)
+                    .await
+                {
+                    Ok(_) => {
+                        info!(
+                            "Successfully updated existing chunk {} for page: {} (ID: {})",
+                            index, url, object_id
+                        );
+                    }
+                    Err(update_err) => {
+                        error!(
+                            "Failed to update chunk {} for page {}: {}",
+                            index, url, update_err
+                        );
+                        return Err(anyhow::anyhow!("Weaviate update error: {}", update_err));
+                    }
+                }
+            } else {
+                error!("Failed to index chunk {} for page {}: {}", index, url, err_str);
+                return Err(anyhow::anyhow!("Weaviate indexing error: {}", err_str));
             }
         }
     }

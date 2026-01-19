@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use shared_crawler_api::{WEAVIATE_CLASS_NAME, WebPageChunk, WebPageResult, util_fns::load_env};
 use std::env;
 use weaviate_community::{WeaviateClient, collections::query::GetQuery};
+use strsim::normalized_levenshtein;
+
+mod ranking;
 
 #[derive(Debug, Deserialize)]
 struct SearchQuery {
@@ -57,11 +60,14 @@ async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> im
         query.query.replace("\"", "\\\"")
     );
 
+    // Fetch more results than requested to allow for filtering
+    let fetch_limit = query.limit * 4;
+
     // Build the GetQuery using the weaviate-community crate, using hybrid search
     let weaviate_query = GetQuery::builder(WEAVIATE_CLASS_NAME, WebPageChunk::field_names())
-        .with_limit(query.limit as u32)
+        .with_limit(fetch_limit as u32)
         .with_hybrid(&hybrid)
-        .with_additional(vec!["distance"])
+        .with_additional(vec!["score"])
         .build();
 
     // Execute the query
@@ -85,8 +91,46 @@ async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> im
                 }
             }
 
-            let total = results.len();
-            HttpResponse::Ok().json(SearchResult { results, total })
+            // Apply ranking boosts (URL length, domain root, path depth)
+            let ranking_config = ranking::RankingConfig::default();
+            ranking::apply_ranking_boosts(&mut results, &ranking_config);
+
+            // Deduplicate and diversify results
+            let mut final_results: Vec<WebPageResult> = Vec::new();
+            let mut seen_titles: Vec<String> = Vec::new();
+
+            for result in results {
+                if final_results.len() >= query.limit {
+                    break;
+                }
+
+                let title = result.data.page_title.to_lowercase();
+                let mut is_similar = false;
+
+                for seen_title in &seen_titles {
+                    if normalized_levenshtein(&title, seen_title) > 0.8 {
+                        is_similar = true;
+                        break;
+                    }
+                }
+
+                if !is_similar {
+                    final_results.push(result.clone());
+                    seen_titles.push(title);
+                }
+            }
+            
+            // If we don't have enough diverse results, fill up with the rest
+            // (Only if strictly necessary, but for now we prioritize diversity heavily)
+            // Uncomment the block below if we want to ensure we return `limit` items even if similar
+            /*
+            if final_results.len() < query.limit {
+                 // logic to backfill
+            }
+            */
+
+             let total = final_results.len();
+             HttpResponse::Ok().json(SearchResult { results: final_results, total })
         }
         Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
             error: format!("Failed to query Weaviate: {}", e),
@@ -106,7 +150,7 @@ async fn plagiat(req: web::Json<PlagiatRequest>, data: web::Data<AppState>) -> i
     let weaviate_query = GetQuery::builder(WEAVIATE_CLASS_NAME, WebPageChunk::field_names())
         .with_limit(5)
         .with_hybrid(&hybrid)
-        .with_additional(vec!["distance"])
+        .with_additional(vec!["score"])
         .build();
 
     // Execute the query

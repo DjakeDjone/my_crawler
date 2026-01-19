@@ -53,6 +53,16 @@ impl BrowserPool {
         }
 
         let config = builder
+            .no_sandbox()
+            .args([
+                "--headless=new",
+                "--disable-gpu",
+                "--disable-dev-shm-usage",
+                "--disable-software-rasterizer",
+                "--no-first-run",
+                "--disable-extensions",
+                "--remote-debugging-port=0",
+            ])
             .build()
             .map_err(|e| anyhow::anyhow!("failed to build BrowserConfig: {}", e))?;
 

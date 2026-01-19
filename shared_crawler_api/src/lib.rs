@@ -192,14 +192,15 @@ impl WebPageResult {
     pub fn from_weaviate_json(value: &serde_json::Value) -> Option<Self> {
         let data = WebPageChunk::from_weaviate_json(value)?;
 
-        let distance = value
+        let score = value
             .get("_additional")
-            .and_then(|a| a.get("distance"))
-            .and_then(|d| d.as_f64())
-            .unwrap_or(1.0) as f32;
-
-        // Convert distance to similarity score (0-1 range, higher is better)
-        let score = 1.0 - distance;
+            .and_then(|a| a.get("score"))
+            .and_then(|d| {
+                 d.as_f64().map(|f| f as f32).or_else(|| {
+                     d.as_str().and_then(|s| s.parse::<f32>().ok())
+                 })
+            })
+            .unwrap_or(0.0);
 
         Some(Self { data, score })
     }

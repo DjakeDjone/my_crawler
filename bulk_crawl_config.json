@@ -1,0 +1,41 @@
+{
+  "crawler_url": "http://localhost:8001",
+  "max_pages_per_url": 3,
+  "same_domain": true,
+  "use_browser": false,
+  "delay_between_submissions_ms": 200,
+  "delay_between_batches_ms": 2000,
+  "batch_size": 10,
+  "skip_domains": [
+    "localhost",
+    "127.0.0.1",
+    "duckduckgo.com",
+    "www.google.com",
+    "search.brave.com",
+    "accounts.google.com",
+    "accounts.hetzner.com",
+    "mail.google.com",
+    "outlook.office.com",
+    "teams.microsoft.com",
+    "music.youtube.com",
+    "gemini.google.com",
+    "chatgpt.com",
+    "lightmailer-bs.gmx.net",
+    "lightmailer-bap.gmx.net"
+  ],
+  "skip_patterns": [
+    "/login",
+    "/signin",
+    "/auth",
+    "/oauth",
+    "?code=",
+    "?token="
+  ],
+  "browser_domains": [
+    "nuxt.com",
+    "ui.nuxt.com",
+    "content.nuxt.com",
+    "vuejs.org",
+    "tiptap.dev"
+  ]
+}
