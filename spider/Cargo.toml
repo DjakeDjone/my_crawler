@@ -27,3 +27,4 @@ uuid = { version = "1.18.1", features = ["v5"] }
 actix-web = "4.12.0"
 actix-cors = "0.7.1"
 chromiumoxide = "0.8.0"
+rusqlite = { version = "0.31", features = ["bundled"] }

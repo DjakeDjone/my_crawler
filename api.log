@@ -1,0 +1,228 @@
+nohup: ignoring input
+   Compiling proc-macro2 v1.0.103
+   Compiling quote v1.0.42
+   Compiling unicode-ident v1.0.22
+   Compiling libc v0.2.177
+   Compiling serde_core v1.0.228
+   Compiling syn v2.0.109
+   Compiling serde v1.0.228
+   Compiling cfg-if v1.0.4
+   Compiling smallvec v1.15.1
+   Compiling pin-project-lite v0.2.16
+   Compiling itoa v1.0.15
+   Compiling log v0.4.28
+   Compiling futures-core v0.3.31
+   Compiling parking_lot_core v0.9.12
+   Compiling jobserver v0.1.34
+   Compiling serde_derive v1.0.228
+   Compiling synstructure v0.13.2
+   Compiling shlex v1.3.0
+   Compiling scopeguard v1.2.0
+   Compiling find-msvc-tools v0.1.4
+   Compiling memchr v2.7.6
+   Compiling cc v1.2.45
+   Compiling bytes v1.10.1
+   Compiling lock_api v0.4.14
+   Compiling pkg-config v0.3.32
+   Compiling parking_lot v0.12.5
+   Compiling zerofrom-derive v0.1.6
+   Compiling tokio-macros v2.6.0
+   Compiling mio v1.1.0
+   Compiling signal-hook-registry v1.4.6
+   Compiling socket2 v0.6.1
+   Compiling once_cell v1.21.3
+   Compiling futures-sink v0.3.31
+   Compiling tokio v1.48.0
+   Compiling zerofrom v0.1.6
+   Compiling yoke-derive v0.8.1
+   Compiling fnv v1.0.7
+   Compiling stable_deref_trait v1.2.1
+   Compiling yoke v0.8.1
+   Compiling zerovec-derive v0.11.2
+   Compiling version_check v0.9.5
+   Compiling zerovec v0.11.5
+   Compiling tracing-core v0.1.34
+   Compiling displaydoc v0.2.5
+   Compiling tracing-attributes v0.1.30
+   Compiling slab v0.4.11
+   Compiling tracing v0.1.41
+   Compiling futures-channel v0.3.31
+   Compiling pin-utils v0.1.0
+   Compiling futures-macro v0.3.31
+   Compiling futures-task v0.3.31
+   Compiling allocator-api2 v0.2.21
+   Compiling futures-io v0.3.31
+   Compiling equivalent v1.0.2
+   Compiling foldhash v0.2.0
+   Compiling hashbrown v0.16.0
+   Compiling futures-util v0.3.31
+   Compiling tokio-util v0.7.17
+   Compiling tinystr v0.8.2
+   Compiling litemap v0.8.1
+   Compiling writeable v0.6.2
+   Compiling percent-encoding v2.3.2
+   Compiling icu_locale_core v2.1.1
+   Compiling indexmap v2.12.0
+   Compiling zerotrie v0.2.3
+   Compiling potential_utf v0.1.4
+   Compiling vcpkg v0.2.15
+   Compiling bitflags v2.10.0
+   Compiling icu_normalizer_data v2.1.1
+   Compiling httparse v1.10.1
+   Compiling icu_properties_data v2.1.1
+   Compiling openssl-sys v0.9.111
+   Compiling icu_collections v2.1.1
+   Compiling icu_provider v2.1.1
+   Compiling icu_properties v2.1.1
+   Compiling icu_normalizer v2.1.1
+   Compiling http v0.2.12
+   Compiling typenum v1.19.0
+   Compiling getrandom v0.3.4
+   Compiling idna_adapter v1.2.1
+   Compiling generic-array v0.14.9
+   Compiling openssl v0.10.75
+   Compiling utf8_iter v1.0.4
+   Compiling try-lock v0.2.5
+   Compiling ryu v1.0.20
+   Compiling tower-service v0.3.3
+   Compiling foreign-types-shared v0.1.1
+   Compiling serde_json v1.0.145
+   Compiling foreign-types v0.3.2
+   Compiling want v0.3.1
+   Compiling idna v1.1.0
+   Compiling form_urlencoded v1.2.2
+   Compiling http v1.3.1
+   Compiling zstd-sys v2.0.16+zstd.1.5.7
+   Compiling openssl-macros v0.1.1
+   Compiling num-conv v0.1.0
+   Compiling powerfmt v0.2.0
+   Compiling time-core v0.1.6
+   Compiling zerocopy v0.8.27
+   Compiling native-tls v0.2.14
+   Compiling time-macros v0.2.24
+   Compiling deranged v0.5.5
+   Compiling h2 v0.3.27
+   Compiling socket2 v0.5.10
+   Compiling openssl-probe v0.1.6
+   Compiling httpdate v1.0.3
+   Compiling time v0.3.44
+   Compiling http-body v1.0.1
+   Compiling url v2.5.7
+   Compiling encoding_rs v0.8.35
+   Compiling zstd-safe v7.2.4
+   Compiling local-waker v0.1.4
+   Compiling alloc-no-stdlib v2.0.4
+   Compiling crc32fast v1.5.0
+   Compiling mime v0.3.17
+   Compiling base64 v0.22.1
+   Compiling alloc-stdlib v0.2.2
+   Compiling ppv-lite86 v0.2.21
+   Compiling tokio-native-tls v0.3.1
+   Compiling crypto-common v0.1.6
+   Compiling block-buffer v0.10.4
+   Compiling serde_urlencoded v0.7.1
+   Compiling rand_core v0.9.3
+   Compiling aho-corasick v1.1.4
+   Compiling ipnet v2.11.0
+   Compiling regex-syntax v0.8.8
+   Compiling simd-adler32 v0.3.7
+   Compiling unicode-xid v0.2.6
+   Compiling adler2 v2.0.1
+   Compiling atomic-waker v1.1.2
+   Compiling h2 v0.4.12
+   Compiling miniz_oxide v0.8.9
+   Compiling derive_more-impl v2.0.1
+   Compiling regex-automata v0.4.13
+   Compiling bytestring v1.5.0
+   Compiling rand_chacha v0.9.0
+   Compiling digest v0.10.7
+   Compiling brotli-decompressor v5.0.0
+   Compiling actix-utils v3.0.1
+   Compiling http-body v0.4.6
+   Compiling actix-rt v2.11.0
+   Compiling cookie v0.18.1
+   Compiling cookie v0.16.2
+   Compiling actix-service v2.0.3
+   Compiling regex-lite v0.1.8
+   Compiling cpufeatures v0.2.17
+   Compiling sha1 v0.10.6
+   Compiling actix-router v0.5.3
+   Compiling hyper v0.14.32
+   Compiling flate2 v1.1.5
+   Compiling brotli v8.0.2
+   Compiling rand v0.9.2
+   Compiling regex v1.12.2
+   Compiling zstd v0.13.3
+   Compiling hyper v1.7.0
+   Compiling derive_more v2.0.1
+   Compiling local-channel v0.1.5
+   Compiling actix-codec v0.5.2
+   Compiling sync_wrapper v1.0.2
+   Compiling language-tags v0.3.2
+   Compiling psl-types v2.0.11
+   Compiling tower-layer v0.3.3
+   Compiling litrs v1.0.0
+   Compiling base64 v0.21.7
+   Compiling foldhash v0.1.5
+   Compiling actix-http v3.11.2
+   Compiling rustls-pemfile v1.0.4
+   Compiling document-features v0.2.12
+   Compiling tower v0.5.2
+   Compiling publicsuffix v2.3.0
+   Compiling hyper-util v0.1.17
+   Compiling hyper-tls v0.5.0
+   Compiling actix-web-codegen v4.3.0
+   Compiling actix-server v2.6.0
+   Compiling http-body-util v0.1.3
+   Compiling actix-macros v0.2.4
+   Compiling sync_wrapper v0.1.2
+   Compiling iri-string v0.7.9
+   Compiling zeroize v1.8.2
+   Compiling sha1_smol v1.0.1
+   Compiling impl-more v0.1.9
+   Compiling actix-web v4.12.0
+   Compiling uuid v1.18.1
+   Compiling rustls-pki-types v1.13.0
+   Compiling tower-http v0.6.6
+   Compiling reqwest v0.11.27
+   Compiling hyper-tls v0.6.0
+   Compiling cookie_store v0.21.1
+   Compiling reqwest v0.12.24
+   Compiling weaviate-community v0.2.2
+   Compiling actix-cors v0.7.1
+   Compiling shared_crawler_api v0.1.0 (/root/my_crawler/shared_crawler_api)
+   Compiling strsim v0.11.1
+   Compiling api v0.1.0 (/root/my_crawler/api)
+warning: unused import: `WebPageChunk`
+ --> api/src/ranking.rs:6:26
+  |
+6 | use shared_crawler_api::{WebPageChunk, WebPageResult};
+  |                          ^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: associated function `new` is never used
+  --> api/src/ranking.rs:44:12
+   |
+42 | impl RankingConfig {
+   | ------------------ associated function in this implementation
+43 |     /// Create a new config with custom values
+44 |     pub fn new(
+   |            ^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `api` (bin "api") generated 2 warnings (run `cargo fix --bin "api"` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 6m 08s
+     Running `target/release/api`
+Loaded env from: .env
+🔒 CORS allowed origins: http://localhost:3000,https://search.fri3dl.dev
+🚀 Starting API server on http://127.0.0.1:8000
+📝 Routes:
+   GET  /health         - Health check
+   GET  /search         - Search vector database
+   POST /plagiat        - Check text for plagiarism
+   GET  /count          - Document count
+   GET  /page           - Get all chunks for a page
+
+🔗 Connected to Weaviate at: http://localhost:8080

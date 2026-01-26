@@ -1,4 +1,5 @@
 use crate::crawl_loop::CrawlLoop;
+use crate::stats::CrawlStats;
 use crate::weaviate::ensure_schema;
 use actix_cors::Cors;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
@@ -10,9 +11,13 @@ use tokio::sync::Mutex;
 use weaviate_community::WeaviateClient;
 
 pub mod crawl_loop;
+pub mod dedup;
 pub mod extractor;
 pub mod extractor_content;
 pub mod index;
+pub mod robots;
+pub mod state;
+pub mod stats;
 pub mod weaviate;
 pub mod web_visitor;
 pub mod web_visitor_browser;
@@ -22,6 +27,7 @@ const REQUEST_TIMEOUT_SECS: u64 = 30;
 
 struct AppState {
     crawl_loop: Arc<Mutex<CrawlLoop>>,
+    stats: Arc<CrawlStats>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -40,6 +46,9 @@ pub struct CrawlRequest {
     /// Timeout in milliseconds for wait_for_selector (default: 5000)
     #[serde(default = "default_wait_timeout")]
     pub wait_timeout_ms: u64,
+    /// Maximum crawl depth (default: 10)
+    #[serde(default = "default_max_depth")]
+    pub max_depth: usize,
 }
 
 fn default_same_domain() -> bool {
@@ -48,6 +57,10 @@ fn default_same_domain() -> bool {
 
 fn default_wait_timeout() -> u64 {
     5000
+}
+
+fn default_max_depth() -> usize {
+    10
 }
 
 #[derive(Debug, Serialize)]
@@ -63,6 +76,26 @@ async fn health_check() -> impl Responder {
     HttpResponse::Ok().json(serde_json::json!({
         "status": "ok",
         "message": "Crawler API is running"
+    }))
+}
+
+/// Status endpoint returning crawler metrics
+async fn status(app_state: web::Data<AppState>) -> impl Responder {
+    let stats = app_state.stats.snapshot();
+    let queue_size = {
+        let loop_lock = app_state.crawl_loop.lock().await;
+        loop_lock.queue_size().await
+    };
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "status": "ok",
+        "queue_size": queue_size,
+        "pages_crawled": stats.pages_crawled,
+        "pages_failed": stats.pages_failed,
+        "pages_skipped_robots": stats.pages_skipped_robots,
+        "pages_skipped_dedup": stats.pages_skipped_dedup,
+        "pages_skipped_depth": stats.pages_skipped_depth,
+        "retries_attempted": stats.retries_attempted,
     }))
 }
 
@@ -116,13 +149,17 @@ async fn main() -> std::io::Result<()> {
     println!("🚀 Starting Crawler server on http://{}", bind_address);
     println!("📝 Routes:");
     println!("   GET  /health         - Health check");
+    println!("   GET  /status         - Crawler status and metrics");
     println!("   POST /crawl          - Crawl a URL");
     println!();
     println!("🔗 Connected to Weaviate at: {}", weaviate_url);
 
-    // Create and start a CrawlLoop. We wrap it in an Arc<Mutex<...>> so it can be shared safely
+    // Create shared stats
+    let stats = Arc::new(CrawlStats::new());
+
+    // Create and start a CrawlLoop. We wrap it in an Arc<Mutex<..>> so it can be shared safely
     // across actix handlers while still allowing mutable access.
-    let crawl_loop = Arc::new(Mutex::new(CrawlLoop::new()));
+    let crawl_loop = Arc::new(Mutex::new(CrawlLoop::new(stats.clone())));
     // Set the Weaviate client using the async mutex to avoid blocking the runtime.
     // We intentionally await the lock here because `main` is async under the actix runtime.
     {
@@ -142,6 +179,7 @@ async fn main() -> std::io::Result<()> {
 
     let app_state = web::Data::new(AppState {
         crawl_loop: crawl_loop.clone(),
+        stats: stats.clone(),
     });
 
     HttpServer::new(move || {
@@ -179,6 +217,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(cors)
             .app_data(app_state.clone())
             .route("/health", web::get().to(health_check))
+            .route("/status", web::get().to(status))
             .route("/crawl", web::post().to(crawl))
     })
     .bind(&bind_address)?

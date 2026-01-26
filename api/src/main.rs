@@ -93,7 +93,7 @@ async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> im
 
             // Apply ranking boosts (URL length, domain root, path depth)
             let ranking_config = ranking::RankingConfig::default();
-            ranking::apply_ranking_boosts(&mut results, &ranking_config);
+            ranking::apply_ranking_boosts(&mut results, &ranking_config, &query.query);
 
             // Deduplicate and diversify results
             let mut final_results: Vec<WebPageResult> = Vec::new();

@@ -1,12 +1,14 @@
 use std::{
     collections::{HashMap, VecDeque},
+    env,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
+use governor::{Quota, RateLimiter, clock::DefaultClock, state::{InMemoryState, NotKeyed}};
 use tokio::{
     sync::{Mutex, RwLock},
     task::JoinHandle,
@@ -17,107 +19,149 @@ use url::Url;
 use weaviate_community::WeaviateClient;
 
 use crate::{
+    dedup::ContentDedup,
+    robots::RobotsCache,
+    stats::CrawlStats,
     web_visitor::{extract_links, get_base_url, normalize_url, WebVisitor, WebVisitorImpl},
     web_visitor_browser::WebVisitorBrowser,
     CrawlRequest,
 };
 
+/// URL entry in the crawl queue with metadata
+#[derive(Clone, Debug)]
+struct QueuedUrl {
+    url: String,
+    depth: usize,
+    retry_count: usize,
+}
+
 pub struct CrawlLoopSettings {
-    pub max_rps: u32, // global (not enforced in this simple runner)
+    pub max_rps: u32,
     pub max_rps_per_base_url: u32,
     pub max_concurrent_requests: u32,
-
-    // Browser fallback configuration:
-    // If enabled, the crawler will attempt a browser-backed fetch when the
-    // HTTP client returns empty or the page matches lightweight heuristics
-    // that commonly indicate a JS-rendered site.
+    pub max_retries: usize,
+    pub retry_base_delay_ms: u64,
     pub browser_fallback_enabled: bool,
-    // Minimum HTML size (bytes) below which we'll consider falling back to the browser.
     pub browser_fallback_min_html_size: usize,
 }
 
 impl CrawlLoopSettings {
-    pub fn new(
-        max_rps: u32,
-        max_rps_per_base_url: u32,
-        max_concurrent_requests: u32,
-        browser_fallback_enabled: bool,
-        browser_fallback_min_html_size: usize,
-    ) -> Self {
-        CrawlLoopSettings {
-            max_rps,
-            max_rps_per_base_url,
-            max_concurrent_requests,
-            browser_fallback_enabled,
-            browser_fallback_min_html_size,
-        }
-    }
+    pub fn from_env() -> Self {
+        let max_concurrent = env::var("MAX_CONCURRENT_REQUESTS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(4);
+        
+        let max_retries = env::var("MAX_RETRIES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3);
+        
+        let retry_base_delay_ms = env::var("RETRY_BASE_DELAY_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1000);
 
-    pub fn default() -> Self {
         CrawlLoopSettings {
             max_rps: 100,
             max_rps_per_base_url: 10,
-            max_concurrent_requests: 4,
-            // enable browser fallback by default; toggle via code or environment if needed
+            max_concurrent_requests: max_concurrent,
+            max_retries,
+            retry_base_delay_ms,
             browser_fallback_enabled: true,
-            // pages with HTML under this many bytes will be considered for a browser fetch
             browser_fallback_min_html_size: 1024,
         }
     }
 }
 
+impl Default for CrawlLoopSettings {
+    fn default() -> Self {
+        Self::from_env()
+    }
+}
+
+type DomainRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
+
 struct CrawlRunner {
     id: usize,
-    crawl_requests: Arc<RwLock<HashMap<String, CrawlRequest>>>, // base_url -> req
+    crawl_requests: Arc<RwLock<HashMap<String, CrawlRequest>>>,
     settings: Arc<RwLock<CrawlLoopSettings>>,
-    last_request_times: Arc<Mutex<HashMap<String, Instant>>>,
+    rate_limiters: Arc<Mutex<HashMap<String, Arc<DomainRateLimiter>>>>,
     shutdown: Arc<AtomicBool>,
     weaviate_client: Option<Arc<WeaviateClient>>,
+    robots_cache: Arc<RobotsCache>,
+    dedup: Arc<ContentDedup>,
+    stats: Arc<CrawlStats>,
     handle: Option<JoinHandle<()>>,
 }
 
 impl CrawlRunner {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         id: usize,
         crawl_requests: Arc<RwLock<HashMap<String, CrawlRequest>>>,
         settings: Arc<RwLock<CrawlLoopSettings>>,
-        last_request_times: Arc<Mutex<HashMap<String, Instant>>>,
+        rate_limiters: Arc<Mutex<HashMap<String, Arc<DomainRateLimiter>>>>,
         shutdown: Arc<AtomicBool>,
         weaviate_client: Option<Arc<WeaviateClient>>,
+        robots_cache: Arc<RobotsCache>,
+        dedup: Arc<ContentDedup>,
+        stats: Arc<CrawlStats>,
     ) -> Self {
         CrawlRunner {
             id,
             crawl_requests,
             settings,
-            last_request_times,
+            rate_limiters,
             shutdown,
             weaviate_client,
+            robots_cache,
+            dedup,
+            stats,
             handle: None,
         }
     }
 
+    /// Get or create a rate limiter for a domain
+    async fn get_rate_limiter(
+        rate_limiters: &Arc<Mutex<HashMap<String, Arc<DomainRateLimiter>>>>,
+        domain: &str,
+        rps: u32,
+    ) -> Arc<DomainRateLimiter> {
+        let mut limiters = rate_limiters.lock().await;
+        if let Some(limiter) = limiters.get(domain) {
+            return limiter.clone();
+        }
+
+        // Use NonZeroU32::new with fallback to 1 for safety
+        let rps_nonzero = std::num::NonZeroU32::new(rps.max(1)).unwrap();
+        let quota = Quota::per_second(rps_nonzero);
+        let limiter = Arc::new(RateLimiter::direct(quota));
+        limiters.insert(domain.to_string(), limiter.clone());
+        limiter
+    }
+
     fn start(&mut self) {
         if self.handle.is_some() {
-            // already started
             return;
         }
 
         let id = self.id;
         let crawl_requests = self.crawl_requests.clone();
         let settings = self.settings.clone();
-        let last_request_times = self.last_request_times.clone();
+        let rate_limiters = self.rate_limiters.clone();
         let shutdown = self.shutdown.clone();
         let maybe_client = self.weaviate_client.clone();
+        let robots_cache = self.robots_cache.clone();
+        let dedup = self.dedup.clone();
+        let stats = self.stats.clone();
 
-        // Spawn the background task.
         let handle = tokio::spawn(async move {
             let web_visitor = WebVisitorImpl::new();
-            // move the optional client into the async block
             let weaviate_client = maybe_client;
 
             loop {
                 if !shutdown.load(Ordering::SeqCst) {
-                    // shutdown requested
                     tracing::info!("runner[{}] shutting down", id);
                     break;
                 }
@@ -134,7 +178,6 @@ impl CrawlRunner {
                 let crawl_request = match maybe_request {
                     Some(r) => r,
                     None => {
-                        // nothing to do right now
                         sleep(Duration::from_millis(250)).await;
                         continue;
                     }
@@ -143,61 +186,71 @@ impl CrawlRunner {
                 tracing::info!("runner[{}] starting crawl {}", id, crawl_request.url);
 
                 let start_base = get_base_url(&crawl_request.url);
-                let mut to_visit: VecDeque<String> = VecDeque::new();
+                let max_depth = crawl_request.max_depth;
+                
+                let mut to_visit: VecDeque<QueuedUrl> = VecDeque::new();
                 let mut visited: HashMap<String, ()> = HashMap::new();
-                to_visit.push_back(normalize_url(&crawl_request.url));
+                
+                to_visit.push_back(QueuedUrl {
+                    url: normalize_url(&crawl_request.url),
+                    depth: 0,
+                    retry_count: 0,
+                });
+                
                 let mut pages_crawled = 0usize;
+
+                // Get settings once
+                let (max_retries, retry_base_delay_ms, max_rps_per_base) = {
+                    let s = settings.read().await;
+                    (s.max_retries, s.retry_base_delay_ms, s.max_rps_per_base_url)
+                };
 
                 while shutdown.load(Ordering::SeqCst)
                     && pages_crawled < crawl_request.max_pages
                     && !to_visit.is_empty()
                 {
-                    let url = to_visit.pop_front().unwrap();
+                    let queued = to_visit.pop_front().unwrap();
+                    let url = queued.url.clone();
+                    let depth = queued.depth;
+                    let retry_count = queued.retry_count;
+
                     if visited.contains_key(&url) {
                         continue;
                     }
 
-                    // Enforce simple per-base-url rate limiting
-                    {
-                        let settings_read = settings.read().await;
-                        let max_per_base = settings_read.max_rps_per_base_url;
-                        drop(settings_read);
-
-                        if max_per_base > 0 {
-                            let min_interval_secs = 1.0 / (max_per_base as f64);
-                            let min_interval = Duration::from_secs_f64(min_interval_secs.max(0.0));
-
-                            let mut lrt = last_request_times.lock().await;
-                            let now = Instant::now();
-                            if let Some(last) = lrt.get(&start_base) {
-                                if now.duration_since(*last) < min_interval {
-                                    let wait = min_interval - now.duration_since(*last);
-                                    tracing::debug!(
-                                        "runner[{}] sleeping {:?} to respect rate limit for {}",
-                                        id,
-                                        wait,
-                                        start_base
-                                    );
-                                    // release lock while sleeping
-                                    drop(lrt);
-                                    sleep(wait).await;
-                                    // after sleeping re-acquire and update last time below
-                                    lrt = last_request_times.lock().await;
-                                }
-                            }
-
-                            lrt.insert(start_base.clone(), Instant::now());
-                        }
+                    // Check depth limit
+                    if depth > max_depth {
+                        tracing::debug!(
+                            "runner[{}] skipping {} (depth {} > max {})",
+                            id, url, depth, max_depth
+                        );
+                        stats.inc_skipped_depth();
+                        visited.insert(url.clone(), ());
+                        continue;
                     }
 
-                    // Fetch page using appropriate method based on use_browser flag
-                    let fetch_result: Result<String, anyhow::Error> = if crawl_request.use_browser {
-                        // Direct browser mode - use browser with optional selector waiting
-                        tracing::debug!(
-                            "runner[{}] using browser mode for {}",
-                            id,
-                            url
+                    // Check robots.txt
+                    if !robots_cache.is_allowed(&url).await {
+                        tracing::info!(
+                            "runner[{}] skipping {} (disallowed by robots.txt)",
+                            id, url
                         );
+                        stats.inc_skipped_robots();
+                        visited.insert(url.clone(), ());
+                        continue;
+                    }
+
+                    // Rate limiting using governor
+                    let limiter = Self::get_rate_limiter(
+                        &rate_limiters,
+                        &start_base,
+                        max_rps_per_base,
+                    ).await;
+                    limiter.until_ready().await;
+
+                    // Fetch page
+                    let fetch_result: Result<String, anyhow::Error> = if crawl_request.use_browser {
+                        tracing::debug!("runner[{}] using browser mode for {}", id, url);
                         WebVisitorBrowser::new()
                             .fetch_page_with_options(
                                 &url,
@@ -206,52 +259,26 @@ impl CrawlRunner {
                             )
                             .await
                     } else {
-                        // HTTP mode with optional browser fallback
                         web_visitor.fetch_page(&url).await
                     };
 
                     match fetch_result {
                         Ok(mut html) => {
-                            // Only apply browser fallback heuristics if NOT in explicit browser mode
+                            // Browser fallback heuristics (if not in explicit browser mode)
                             if !crawl_request.use_browser {
-                                let mut try_browser = false;
-                                {
-                                    let settings_read = settings.read().await;
-                                    if settings_read.browser_fallback_enabled {
-                                        if html.trim().is_empty() {
-                                            try_browser = true;
-                                        } else {
-                                            if html.len() < settings_read.browser_fallback_min_html_size
-                                            {
-                                                try_browser = true;
-                                            } else {
-                                                let html_lower = html.to_lowercase();
-                                                // Common markers for client-side frameworks / JS apps
-                                                if html_lower.contains("<noscript")
-                                                    || html_lower.contains("id=\"app\"")
-                                                    || html_lower.contains("id=\"root\"")
-                                                    || html_lower.contains("data-reactroot")
-                                                    || html_lower.contains("__next_data__")
-                                                    || html_lower.contains("window.__initial_state__")
-                                                    || html_lower.contains(
-                                                        "window.__NEXT_DATA__".to_lowercase().as_str(),
-                                                    )
-                                                {
-                                                    try_browser = true;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                                let settings_read = settings.read().await;
+                                let try_browser = settings_read.browser_fallback_enabled
+                                    && (html.trim().is_empty()
+                                        || html.len() < settings_read.browser_fallback_min_html_size
+                                        || Self::looks_like_spa(&html));
+                                drop(settings_read);
 
                                 if try_browser {
                                     tracing::debug!(
-                                        "runner[{}] heuristic/browser fallback triggered for {}",
-                                        id,
-                                        url
+                                        "runner[{}] browser fallback for {}",
+                                        id, url
                                     );
-
-                                    match WebVisitorBrowser::new()
+                                    if let Ok(browser_html) = WebVisitorBrowser::new()
                                         .fetch_page_with_options(
                                             &url,
                                             crawl_request.wait_for_selector.as_deref(),
@@ -259,103 +286,130 @@ impl CrawlRunner {
                                         )
                                         .await
                                     {
-                                        Ok(browser_html) => {
-                                            if !browser_html.trim().is_empty() {
-                                                tracing::info!(
-                                                    "runner[{}] browser fetched content for {}",
-                                                    id,
-                                                    url
-                                                );
-                                                html = browser_html;
-                                            } else {
-                                                tracing::warn!(
-                                                    "runner[{}] browser returned empty content for {}",
-                                                    id,
-                                                    url
-                                                );
-                                            }
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                "runner[{}] browser fetch failed for {}: {:?}",
-                                                id,
-                                                url,
-                                                e
-                                            );
+                                        if !browser_html.trim().is_empty() {
+                                            html = browser_html;
                                         }
                                     }
                                 }
                             }
 
                             if html.trim().is_empty() {
-                                tracing::warn!("runner[{}] fetched empty content for {}", id, url);
-                                // Mark visited to avoid retry storms and count the page as attempted.
+                                tracing::warn!("runner[{}] empty content for {}", id, url);
                                 pages_crawled += 1;
+                                stats.inc_failed();
                                 visited.insert(url.clone(), ());
-                                // Skip parsing links for empty content and continue with next URL.
                                 continue;
                             }
 
-                            tracing::info!("runner[{}] fetched {}", id, url);
-                            pages_crawled += 1;
-                            visited.insert(url.clone(), ());
-
-                            if let Some(client_arc) = weaviate_client.as_ref() {
-                                // index_page_safe_with_client expects &WeaviateClient
-                                let client_ref: &WeaviateClient = &*client_arc;
-                                crate::weaviate::index_page_safe_with_client(
-                                    client_ref,
-                                    url.clone(),
-                                    html.clone(),
-                                )
-                                .await
+                            // Check for duplicate content
+                            if dedup.is_duplicate(&html).await {
+                                tracing::info!(
+                                    "runner[{}] skipping {} (duplicate content)",
+                                    id, url
+                                );
+                                stats.inc_skipped_dedup();
+                                visited.insert(url.clone(), ());
+                                // Still extract links from duplicates
                             } else {
-                                tracing::error!("Failed to index page");
+                                // Index the page
+                                tracing::info!("runner[{}] fetched {}", id, url);
+                                pages_crawled += 1;
+                                stats.inc_crawled();
+                                visited.insert(url.clone(), ());
+
+                                if let Some(client_arc) = weaviate_client.as_ref() {
+                                    crate::weaviate::index_page_safe_with_client(
+                                        client_arc,
+                                        url.clone(),
+                                        html.clone(),
+                                    )
+                                    .await;
+                                }
                             }
 
-                            // Try to parse page to find links
+                            // Extract links (always, even from duplicates)
                             if let Ok(base_url_parsed) = Url::parse(&url) {
                                 let links = extract_links(&html, &base_url_parsed);
 
                                 for link in links.into_iter() {
-                                    if crawl_request.same_domain {
-                                        if get_base_url(&link) != start_base {
-                                            continue;
-                                        }
+                                    if crawl_request.same_domain
+                                        && get_base_url(&link) != start_base
+                                    {
+                                        continue;
                                     }
 
                                     let normalized = normalize_url(&link);
-                                    if !visited.contains_key(&normalized)
-                                        && !to_visit.contains(&normalized)
-                                    {
-                                        to_visit.push_back(normalized);
+                                    if !visited.contains_key(&normalized) {
+                                        let already_queued = to_visit.iter()
+                                            .any(|q| q.url == normalized);
+                                        if !already_queued {
+                                            to_visit.push_back(QueuedUrl {
+                                                url: normalized,
+                                                depth: depth + 1,
+                                                retry_count: 0,
+                                            });
+                                        }
                                     }
                                 }
-                            } else {
-                                tracing::debug!("runner[{}] couldn't parse URL {}", id, url);
                             }
                         }
                         Err(e) => {
-                            tracing::warn!("runner[{}] failed fetching {}: {:?}", id, url, e);
-                            // Mark visited to avoid retry storm
-                            visited.insert(url.clone(), ());
+                            tracing::warn!(
+                                "runner[{}] failed fetching {} (attempt {}): {:?}",
+                                id, url, retry_count + 1, e
+                            );
+
+                            // Retry with exponential backoff
+                            if retry_count < max_retries {
+                                let delay = retry_base_delay_ms * (1 << retry_count);
+                                tracing::info!(
+                                    "runner[{}] will retry {} in {}ms",
+                                    id, url, delay
+                                );
+                                stats.inc_retries();
+                                
+                                // Re-queue with incremented retry count
+                                to_visit.push_back(QueuedUrl {
+                                    url: url.clone(),
+                                    depth,
+                                    retry_count: retry_count + 1,
+                                });
+                                
+                                sleep(Duration::from_millis(delay)).await;
+                            } else {
+                                tracing::warn!(
+                                    "runner[{}] giving up on {} after {} retries",
+                                    id, url, max_retries
+                                );
+                                stats.inc_failed();
+                                visited.insert(url.clone(), ());
+                            }
                         }
                     }
 
-                    // small yield to give other tasks some time
+                    // Small yield
                     sleep(Duration::from_millis(5)).await;
-                } // end page crawl loop
+                }
 
                 tracing::info!(
                     "runner[{}] finished crawl {} (pages {})",
-                    id,
-                    crawl_request.url,
-                    pages_crawled
+                    id, crawl_request.url, pages_crawled
                 );
             }
         });
 
         self.handle = Some(handle);
+    }
+
+    /// Check if HTML looks like a single-page app that needs browser rendering
+    fn looks_like_spa(html: &str) -> bool {
+        let html_lower = html.to_lowercase();
+        html_lower.contains("<noscript")
+            || html_lower.contains("id=\"app\"")
+            || html_lower.contains("id=\"root\"")
+            || html_lower.contains("data-reactroot")
+            || html_lower.contains("__next_data__")
+            || html_lower.contains("window.__initial_state__")
     }
 
     fn stop(&mut self) {
@@ -369,21 +423,29 @@ impl CrawlRunner {
 pub struct CrawlLoop {
     crawl_requests: Arc<RwLock<HashMap<String, CrawlRequest>>>,
     settings: Arc<RwLock<CrawlLoopSettings>>,
-    last_request_times: Arc<Mutex<HashMap<String, Instant>>>,
+    rate_limiters: Arc<Mutex<HashMap<String, Arc<DomainRateLimiter>>>>,
     runners: Vec<CrawlRunner>,
     shutdown: Arc<AtomicBool>,
     weaviate_client: Option<Arc<WeaviateClient>>,
+    robots_cache: Arc<RobotsCache>,
+    dedup: Arc<ContentDedup>,
+    stats: Arc<CrawlStats>,
+    queue_size: Arc<AtomicUsize>,
 }
 
 impl CrawlLoop {
-    pub fn new() -> Self {
+    pub fn new(stats: Arc<CrawlStats>) -> Self {
         CrawlLoop {
             crawl_requests: Arc::new(RwLock::new(HashMap::new())),
             settings: Arc::new(RwLock::new(CrawlLoopSettings::default())),
-            last_request_times: Arc::new(Mutex::new(HashMap::new())),
+            rate_limiters: Arc::new(Mutex::new(HashMap::new())),
             runners: Vec::new(),
             shutdown: Arc::new(AtomicBool::new(true)),
             weaviate_client: None,
+            robots_cache: Arc::new(RobotsCache::new()),
+            dedup: Arc::new(ContentDedup::new()),
+            stats,
+            queue_size: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -397,6 +459,11 @@ impl CrawlLoop {
             .write()
             .await
             .insert(base_url, crawl_request);
+        self.queue_size.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub async fn queue_size(&self) -> usize {
+        self.crawl_requests.read().await.len()
     }
 
     pub async fn run(&mut self) {
@@ -404,15 +471,19 @@ impl CrawlLoop {
         let max_concurrent = settings.max_concurrent_requests as usize;
         drop(settings);
 
-        // create and start runners
+        tracing::info!("Starting {} concurrent crawl runners", max_concurrent);
+
         for i in 0..max_concurrent {
             let mut runner = CrawlRunner::new(
                 i,
                 self.crawl_requests.clone(),
                 self.settings.clone(),
-                self.last_request_times.clone(),
+                self.rate_limiters.clone(),
                 self.shutdown.clone(),
                 self.weaviate_client.clone(),
+                self.robots_cache.clone(),
+                self.dedup.clone(),
+                self.stats.clone(),
             );
             runner.start();
             self.runners.push(runner);
@@ -432,7 +503,6 @@ impl CrawlLoop {
 
 impl Drop for CrawlLoop {
     fn drop(&mut self) {
-        // best-effort stop; task aborts happen in runner.stop()
         self.shutdown.store(false, Ordering::SeqCst);
         for runner in &mut self.runners {
             runner.stop();
