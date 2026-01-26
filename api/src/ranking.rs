@@ -3,7 +3,7 @@
 //! This module contains the ranking algorithm for search results.
 //! Modify the `RankingConfig` defaults to tune ranking behavior.
 
-use shared_crawler_api::{WebPageChunk, WebPageResult};
+use shared_crawler_api::WebPageResult;
 use url::Url;
 
 /// Configuration for ranking adjustments.
@@ -41,6 +41,7 @@ impl Default for RankingConfig {
 
 impl RankingConfig {
     /// Create a new config with custom values
+    #[allow(dead_code)]
     pub fn new(
         url_length_boost_factor: f32,
         domain_root_boost: f32,
@@ -140,6 +141,7 @@ pub fn apply_ranking_boosts(results: &mut Vec<WebPageResult>, config: &RankingCo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shared_crawler_api::WebPageChunk;
 
     #[test]
     fn test_path_depth() {

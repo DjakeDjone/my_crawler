@@ -53,8 +53,6 @@ struct AppState {
 }
 
 async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> impl Responder {
-    // Build the hybrid query parameter (combines vector search with a lexical/text match)
-    // Adjust `alpha` to control weight between vector and lexical scoring (0.0 = only lexical, 1.0 = only vector).
     let hybrid = format!(
         r#"{{query: "{}", alpha: 0.5}}"#,
         query.query.replace("\"", "\\\"")
@@ -64,7 +62,13 @@ async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> im
     let fetch_limit = query.limit * 4;
 
     // Build the GetQuery using the weaviate-community crate, using hybrid search
-    let weaviate_query = GetQuery::builder(WEAVIATE_CLASS_NAME, WebPageChunk::field_names())
+    let fields = vec![
+        "chunk_heading", "source_url", "page_title", "description", 
+        "tags", "categories", "paid", "score", "crawled_at"
+    ];
+
+    // Build the GetQuery using the weaviate-community crate, using hybrid search
+    let weaviate_query = GetQuery::builder(WEAVIATE_CLASS_NAME, fields)
         .with_limit(fetch_limit as u32)
         .with_hybrid(&hybrid)
         .with_additional(vec!["score"])
