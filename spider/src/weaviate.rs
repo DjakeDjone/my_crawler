@@ -72,11 +72,10 @@ pub async fn ensure_schema(client: &WeaviateClient) -> Result<()> {
 
     let webpage_class = Class::builder(WEAVIATE_CLASS_NAME)
         .with_description("Web page chunks crawled from the internet")
-        .with_vectorizer("text2vec-ollama")
+        .with_vectorizer("text2vec-transformers")
         .with_module_config(serde_json::json!({
-            "text2vec-ollama": {
-                "apiEndpoint": "http://ollama:11434",
-                "model": "embeddinggemma"
+            "text2vec-transformers": {
+                "vectorizeClassName": false
             }
         }))
         .with_properties(Properties::new(vec![
