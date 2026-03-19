@@ -29,5 +29,7 @@ services:
       t2v-transformers:
         condition: service_started
   t2v-transformers:
-    image: semitechnologies/transformers-inference:sentence-transformers-static-retrieval-mrl-en-v1
+    build:
+      context: .
+      dockerfile: Dockerfile.static-retrieval-mrl
 
