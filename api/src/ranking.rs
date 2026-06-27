@@ -7,7 +7,7 @@ use shared_crawler_api::WebPageResult;
 use url::Url;
 
 /// Configuration for ranking adjustments.
-/// 
+///
 /// Modify these defaults to tune how search results are ranked.
 /// Higher values = stronger effect on final score.
 #[derive(Debug, Clone)]
@@ -58,7 +58,7 @@ impl RankingConfig {
 }
 
 /// Calculate the path depth of a URL (number of non-empty path segments)
-/// 
+///
 /// Examples:
 /// - "https://example.com" → 0
 /// - "https://example.com/" → 0
@@ -76,11 +76,11 @@ fn get_path_depth(url: &str) -> usize {
 }
 
 /// Check if a URL is a domain root (no meaningful path)
-/// 
+///
 /// Returns true for:
 /// - "https://example.com"
 /// - "https://example.com/"
-/// 
+///
 /// Returns false for:
 /// - "https://example.com/page"
 /// - "https://example.com/a/b"
@@ -89,7 +89,7 @@ fn is_domain_root(url: &str) -> bool {
 }
 
 /// Apply all ranking boosts/penalties to a single result
-/// 
+///
 /// This modifies the result's score in place based on:
 /// 1. URL length boost (shorter URLs rank higher)
 /// 2. Domain root boost (root pages get bonus)
@@ -117,15 +117,16 @@ pub fn apply_ranking_boost(result: &mut WebPageResult, config: &RankingConfig, q
     // 4. Exact match boost
     // Simple case-insensitive check
     let query_lower = query.to_lowercase();
-    if !query_lower.is_empty() {
-        if url.to_lowercase().contains(&query_lower) || title.to_lowercase().contains(&query_lower) {
-            result.score += config.exact_match_boost;
-        }
+    if !query_lower.is_empty()
+        && (url.to_lowercase().contains(&query_lower)
+            || title.to_lowercase().contains(&query_lower))
+    {
+        result.score += config.exact_match_boost;
     }
 }
 
 /// Apply ranking boosts to all results and re-sort by score descending
-pub fn apply_ranking_boosts(results: &mut Vec<WebPageResult>, config: &RankingConfig, query: &str) {
+pub fn apply_ranking_boosts(results: &mut [WebPageResult], config: &RankingConfig, query: &str) {
     for result in results.iter_mut() {
         apply_ranking_boost(result, config, query);
     }
@@ -163,9 +164,9 @@ mod tests {
     #[test]
     fn test_ranking_impact() {
         let config = RankingConfig::default();
-        
+
         // internal helper to simulate a result
-        let mut make_result = |url: &str| {
+        let make_result = |url: &str| {
             WebPageResult {
                 score: 0.5, // base score
                 data: WebPageChunk {
@@ -187,7 +188,7 @@ mod tests {
         // Test Google (short url + root)
         let mut google = make_result("google.com");
         apply_ranking_boost(&mut google, &config, "");
-        
+
         // Test Portfolio (longer url + root)
         let mut portfolio = make_result("https://home.fri3dl.dev");
         apply_ranking_boost(&mut portfolio, &config, "");
@@ -204,23 +205,21 @@ mod tests {
     #[test]
     fn test_exact_match_boost() {
         let config = RankingConfig::default();
-        
-        let mut make_result = |url: &str, title: &str| {
-            WebPageResult {
-                score: 0.5,
-                data: WebPageChunk {
-                    source_url: url.to_string(),
-                    page_title: title.to_string(),
-                    chunk_content: "".to_string(),
-                    chunk_heading: None,
-                    description: "".to_string(),
-                    tags: vec![],
-                    categories: vec![],
-                    paid: 0.0,
-                    score: 0.0,
-                    crawled_at: 0,
-                },
-            }
+
+        let make_result = |url: &str, title: &str| WebPageResult {
+            score: 0.5,
+            data: WebPageChunk {
+                source_url: url.to_string(),
+                page_title: title.to_string(),
+                chunk_content: "".to_string(),
+                chunk_heading: None,
+                description: "".to_string(),
+                tags: vec![],
+                categories: vec![],
+                paid: 0.0,
+                score: 0.0,
+                crawled_at: 0,
+            },
         };
 
         // Case 1: Match in Title

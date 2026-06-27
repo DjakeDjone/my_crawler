@@ -1,9 +1,15 @@
 use actix_cors::Cors;
 use actix_web::{App, HttpResponse, HttpServer, Responder, web};
+use qdrant_client::{
+    Qdrant,
+    qdrant::{
+        Condition, CountPointsBuilder, DocumentBuilder, Filter, PrefetchQueryBuilder, Query,
+        QueryPointsBuilder, RrfBuilder, ScrollPointsBuilder,
+    },
+};
 use serde::{Deserialize, Serialize};
-use shared_crawler_api::{WEAVIATE_CLASS_NAME, WebPageChunk, WebPageResult, util_fns::load_env};
-use std::env;
-use weaviate_community::{WeaviateClient, collections::query::GetQuery};
+use shared_crawler_api::{QDRANT_COLLECTION_NAME, WebPageChunk, WebPageResult, util_fns::load_env};
+use std::{collections::HashMap, env};
 use strsim::normalized_levenshtein;
 
 mod ranking;
@@ -49,213 +55,153 @@ struct ErrorResponse {
 }
 
 struct AppState {
-    weaviate_client: WeaviateClient,
+    qdrant: Qdrant,
+    http: reqwest::Client,
+    tei_url: String,
 }
 
 async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> impl Responder {
-    let hybrid = format!(
-        r#"{{query: "{}", alpha: 0.5}}"#,
-        query.query.replace("\"", "\\\"")
-    );
-
-    // Fetch more results than requested to allow for filtering
-    let fetch_limit = query.limit * 4;
-
-    // Build the GetQuery using the weaviate-community crate, using hybrid search
-    let fields = vec![
-        "chunk_heading", "source_url", "page_title", "description", 
-        "tags", "categories", "paid", "score", "crawled_at"
-    ];
-
-    // Build the GetQuery using the weaviate-community crate, using hybrid search
-    let weaviate_query = GetQuery::builder(WEAVIATE_CLASS_NAME, fields)
-        .with_limit(fetch_limit as u32)
-        .with_hybrid(&hybrid)
-        .with_additional(vec!["score"])
-        .build();
-
-    // Execute the query
-    let response = data.weaviate_client.query.get(weaviate_query).await;
-
-    match response {
-        Ok(resp) => {
-            let mut results = Vec::new();
-
-            // Parse the response JSON structure
-            if let Some(data) = resp
-                .get("data")
-                .and_then(|d| d.get("Get"))
-                .and_then(|g| g.get(WEAVIATE_CLASS_NAME))
-                .and_then(|d| d.as_array())
-            {
-                for item in data {
-                    if let Some(result) = WebPageResult::from_weaviate_json(item) {
-                        results.push(result);
-                    }
-                }
-            }
-
-            // Apply ranking boosts (URL length, domain root, path depth)
-            let ranking_config = ranking::RankingConfig::default();
-            ranking::apply_ranking_boosts(&mut results, &ranking_config, &query.query);
-
-            // Deduplicate and diversify results
-            let mut final_results: Vec<WebPageResult> = Vec::new();
+    match hybrid_search(&data, &query.query, query.limit.saturating_mul(4)).await {
+        Ok(mut results) => {
+            ranking::apply_ranking_boosts(
+                &mut results,
+                &ranking::RankingConfig::default(),
+                &query.query,
+            );
+            let mut final_results = Vec::new();
             let mut seen_titles: Vec<String> = Vec::new();
-
             for result in results {
                 if final_results.len() >= query.limit {
                     break;
                 }
-
                 let title = result.data.page_title.to_lowercase();
-                let mut is_similar = false;
-
-                for seen_title in &seen_titles {
-                    if normalized_levenshtein(&title, seen_title) > 0.8 {
-                        is_similar = true;
-                        break;
-                    }
-                }
-
-                if !is_similar {
-                    final_results.push(result.clone());
+                if seen_titles
+                    .iter()
+                    .all(|seen| normalized_levenshtein(&title, seen) <= 0.8)
+                {
                     seen_titles.push(title);
+                    final_results.push(result);
                 }
             }
-            
-            // If we don't have enough diverse results, fill up with the rest
-            // (Only if strictly necessary, but for now we prioritize diversity heavily)
-            // Uncomment the block below if we want to ensure we return `limit` items even if similar
-            /*
-            if final_results.len() < query.limit {
-                 // logic to backfill
-            }
-            */
-
-             let total = final_results.len();
-             HttpResponse::Ok().json(SearchResult { results: final_results, total })
+            HttpResponse::Ok().json(SearchResult {
+                total: final_results.len(),
+                results: final_results,
+            })
         }
-        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
-            error: format!("Failed to query Weaviate: {}", e),
+        Err(error) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: error.to_string(),
         }),
     }
 }
 
+async fn hybrid_search(
+    data: &AppState,
+    text: &str,
+    limit: usize,
+) -> anyhow::Result<Vec<WebPageResult>> {
+    let dense = embed(data, &format!("query: {text}")).await?;
+    let lexical = bm25_document(text);
+    let result = data
+        .qdrant
+        .query(
+            QueryPointsBuilder::new(QDRANT_COLLECTION_NAME)
+                .add_prefetch(
+                    PrefetchQueryBuilder::default()
+                        .query(dense)
+                        .using("dense")
+                        .limit(limit as u64),
+                )
+                .add_prefetch(
+                    PrefetchQueryBuilder::default()
+                        .query(Query::new_nearest(lexical.clone()))
+                        .using("title_bm25")
+                        .limit(limit as u64),
+                )
+                .add_prefetch(
+                    PrefetchQueryBuilder::default()
+                        .query(Query::new_nearest(lexical))
+                        .using("body_bm25")
+                        .limit(limit as u64),
+                )
+                .query(Query::new_rrf(
+                    RrfBuilder::new().weights(vec![2.0, 2.0, 1.0]),
+                ))
+                .limit(limit as u64)
+                .with_payload(true),
+        )
+        .await?;
+    Ok(result
+        .result
+        .into_iter()
+        .filter_map(|point| {
+            WebPageChunk::from_payload_json(&payload_json(point.payload))
+                .map(|data| WebPageResult::new(data, point.score))
+        })
+        .collect())
+}
+
 async fn plagiat(req: web::Json<PlagiatRequest>, data: web::Data<AppState>) -> impl Responder {
-    // Build the hybrid query parameter (combines vector search with a lexical/text match)
-    // Use a moderate alpha so both embedding similarity and lexical matching influence results.
-    let hybrid = format!(
-        r#"{{query: "{}", alpha: 0.5}}"#,
-        req.text.replace("\"", "\\\"")
-    );
+    let result = async {
+        let dense = embed(&data, &format!("query: {}", req.text)).await?;
+        let response = data
+            .qdrant
+            .query(
+                QueryPointsBuilder::new(QDRANT_COLLECTION_NAME)
+                    .query(dense)
+                    .using("dense")
+                    .limit(5)
+                    .with_payload(true),
+            )
+            .await?;
+        Ok::<_, anyhow::Error>(
+            response
+                .result
+                .into_iter()
+                .filter_map(|point| {
+                    WebPageChunk::from_payload_json(&payload_json(point.payload))
+                        .map(|data| WebPageResult::new(data, point.score))
+                })
+                .collect::<Vec<_>>(),
+        )
+    }
+    .await;
 
-    // Build the GetQuery using the weaviate-community crate, using hybrid search
-    let weaviate_query = GetQuery::builder(WEAVIATE_CLASS_NAME, WebPageChunk::field_names())
-        .with_limit(5)
-        .with_hybrid(&hybrid)
-        .with_additional(vec!["score"])
-        .build();
-
-    // Execute the query
-    let response = data.weaviate_client.query.get(weaviate_query).await;
-
-    match response {
-        Ok(resp) => {
-            let mut matched_documents = Vec::new();
-            let mut highest_similarity = 0.0_f32;
-
-            // Parse the response JSON structure
-            if let Some(data) = resp
-                .get("data")
-                .and_then(|d| d.get("Get"))
-                .and_then(|g| g.get(WEAVIATE_CLASS_NAME))
-                .and_then(|d| d.as_array())
-            {
-                for item in data {
-                    if let Some(result) = WebPageResult::from_weaviate_json(item) {
-                        if result.score > highest_similarity {
-                            highest_similarity = result.score;
-                        }
-
-                        // Only include documents above threshold
-                        if result.score >= req.threshold {
-                            matched_documents.push(result);
-                        }
-                    }
-                }
-            }
-
-            let is_plagiat = highest_similarity >= req.threshold;
-
+    match result {
+        Ok(results) => {
+            let highest = results.first().map(|result| result.score).unwrap_or(0.0);
+            let matched_documents = results
+                .into_iter()
+                .filter(|result| result.score >= req.threshold)
+                .collect();
             HttpResponse::Ok().json(PlagiatResult {
-                is_plagiat,
-                similarity_score: highest_similarity,
+                is_plagiat: highest >= req.threshold,
+                similarity_score: highest,
                 matched_documents,
             })
         }
-        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
-            error: format!("Failed to query Weaviate: {}", e),
+        Err(error) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: error.to_string(),
         }),
     }
 }
 
 async fn health_check() -> impl Responder {
-    HttpResponse::Ok().json(serde_json::json!({
-        "status": "ok",
-        "message": "API is running"
-    }))
+    HttpResponse::Ok().json(serde_json::json!({"status": "ok", "message": "API is running"}))
 }
 
-async fn count(_data: web::Data<AppState>) -> impl Responder {
-    // Determine Weaviate base URL from environment (fall back to default)
-    let weaviate_url =
-        env::var("WEAVIATE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
-    let graphql_url = format!("{}/v1/graphql", weaviate_url.trim_end_matches('/'));
-
-    // Construct the GraphQL query to aggregate count for the class
-    let graphql_query = format!(
-        "query {{ Aggregate {{ {} {{ meta {{ count }} }} }} }}",
-        WEAVIATE_CLASS_NAME
-    );
-
-    // Send request
-    let client = reqwest::Client::new();
-    let resp = match client
-        .post(&graphql_url)
-        .json(&serde_json::json!({ "query": graphql_query }))
-        .send()
+async fn count(data: web::Data<AppState>) -> impl Responder {
+    match data
+        .qdrant
+        .count(CountPointsBuilder::new(QDRANT_COLLECTION_NAME).exact(true))
         .await
     {
-        Ok(r) => r,
-        Err(e) => {
-            return HttpResponse::InternalServerError().json(ErrorResponse {
-                error: format!("Failed to contact Weaviate GraphQL endpoint: {}", e),
-            });
-        }
-    };
-
-    let json: serde_json::Value = match resp.json().await {
-        Ok(j) => j,
-        Err(e) => {
-            return HttpResponse::InternalServerError().json(ErrorResponse {
-                error: format!("Invalid JSON response from Weaviate: {}", e),
-            });
-        }
-    };
-
-    // Expected shape: { "data": { "Aggregate": { "<ClassName>": [ { "meta": { "count": <n> } } ] } } }
-    let count = json
-        .get("data")
-        .and_then(|d| d.get("Aggregate"))
-        .and_then(|a| a.get(WEAVIATE_CLASS_NAME))
-        .and_then(|arr| arr.get(0))
-        .and_then(|obj| obj.get("meta"))
-        .and_then(|m| m.get("count"))
-        .and_then(|c| c.as_u64())
-        .unwrap_or(0);
-
-    HttpResponse::Ok().json(serde_json::json!({ "count": count }))
+        Ok(response) => HttpResponse::Ok().json(serde_json::json!({
+            "count": response.result.map(|value| value.count).unwrap_or(0)
+        })),
+        Err(error) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: error.to_string(),
+        }),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -263,147 +209,120 @@ pub struct GetPageRequest {
     pub url: String,
 }
 
-/// returns all chunks for a given url (sorted)
-async fn get_page(query: web::Query<GetPageRequest>, _data: web::Data<AppState>) -> HttpResponse {
-    // Determine Weaviate base URL from environment (fall back to default)
-    println!("Getting page for {}", query.url);
-    let weaviate_url =
-        env::var("WEAVIATE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
-    let graphql_url = format!("{}/v1/graphql", weaviate_url.trim_end_matches('/'));
-
-    // Escape quotes in the URL for embedding into the GraphQL string
-    let url_escaped = query.url.replace('"', "\\\"");
-
-    // Build GraphQL query: filter by source_url and sort by crawled_at ascending
-    let fields = WebPageChunk::field_names().join(" ");
-    let graphql_query = format!(
-        "query {{ Get {{ {}(where: {{path: \"source_url\", operator: Equal, valueString: \"{}\"}}, sort: [{{path: \"crawled_at\", order: asc}}]) {{ {} }} }} }}",
-        WEAVIATE_CLASS_NAME, url_escaped, fields
-    );
-
-    // Send request
-    let client = reqwest::Client::new();
-    let resp = match client
-        .post(&graphql_url)
-        .json(&serde_json::json!({ "query": graphql_query }))
-        .send()
+async fn get_page(query: web::Query<GetPageRequest>, data: web::Data<AppState>) -> HttpResponse {
+    match data
+        .qdrant
+        .scroll(
+            ScrollPointsBuilder::new(QDRANT_COLLECTION_NAME)
+                .filter(Filter::must([Condition::matches(
+                    "source_url",
+                    query.url.clone(),
+                )]))
+                .limit(10_000)
+                .with_payload(true)
+                .with_vectors(false),
+        )
         .await
     {
-        Ok(r) => r,
-        Err(e) => {
-            return HttpResponse::InternalServerError().json(ErrorResponse {
-                error: format!("Failed to contact Weaviate GraphQL endpoint: {}", e),
-            });
+        Ok(response) => {
+            let mut chunks = response
+                .result
+                .into_iter()
+                .filter_map(|point| {
+                    let payload = payload_json(point.payload);
+                    let index = payload
+                        .get("chunk_index")
+                        .and_then(|value| value.as_i64())
+                        .unwrap_or(0);
+                    WebPageChunk::from_payload_json(&payload).map(|chunk| (index, chunk))
+                })
+                .collect::<Vec<_>>();
+            chunks.sort_by_key(|(index, _)| *index);
+            HttpResponse::Ok().json(
+                chunks
+                    .into_iter()
+                    .map(|(_, chunk)| chunk)
+                    .collect::<Vec<_>>(),
+            )
         }
-    };
-
-    let json: serde_json::Value = match resp.json().await {
-        Ok(j) => j,
-        Err(e) => {
-            return HttpResponse::InternalServerError().json(ErrorResponse {
-                error: format!("Invalid JSON response from Weaviate: {}", e),
-            });
-        }
-    };
-
-    // Parse results: expected shape { data: { Get: { "<Class>": [ { ... }, ... ] } } }
-    let mut chunks: Vec<WebPageChunk> = Vec::new();
-    if let Some(items) = json
-        .get("data")
-        .and_then(|d| d.get("Get"))
-        .and_then(|g| g.get(WEAVIATE_CLASS_NAME))
-        .and_then(|a| a.as_array())
-    {
-        for item in items {
-            if let Some(chunk) = WebPageChunk::from_weaviate_json(item) {
-                chunks.push(chunk);
-            }
-        }
+        Err(error) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: error.to_string(),
+        }),
     }
+}
 
-    // Ensure stable sort: first by crawled_at asc, then by chunk_content asc
-    chunks.sort_by(|a, b| {
-        a.crawled_at
-            .cmp(&b.crawled_at)
-            .then(a.chunk_content.cmp(&b.chunk_content))
-    });
+async fn embed(data: &AppState, input: &str) -> anyhow::Result<Vec<f32>> {
+    let mut response = data
+        .http
+        .post(format!("{}/embed", data.tei_url.trim_end_matches('/')))
+        .json(&serde_json::json!({"inputs": [input]}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<Vec<Vec<f32>>>()
+        .await?;
+    anyhow::ensure!(
+        response.len() == 1 && response[0].len() == 384,
+        "TEI returned invalid embedding dimensions"
+    );
+    Ok(response.remove(0))
+}
 
-    HttpResponse::Ok().json(chunks)
+fn bm25_document(text: &str) -> qdrant_client::qdrant::Document {
+    DocumentBuilder::new(text, "qdrant/bm25")
+        .options(HashMap::from([("language".to_string(), "none".into())]))
+        .build()
+}
+
+fn payload_json(payload: HashMap<String, qdrant_client::qdrant::Value>) -> serde_json::Value {
+    serde_json::Value::Object(
+        payload
+            .into_iter()
+            .map(|(key, value)| (key, value.into_json()))
+            .collect(),
+    )
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    // Load environment variables from .env file
     load_env();
-
     let host = env::var("API_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let port = env::var("API_PORT").unwrap_or_else(|_| "8000".to_string());
-    let bind_address = format!("{}:{}", host, port);
-    let weaviate_url =
-        env::var("WEAVIATE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
+    let bind_address = format!("{host}:{port}");
     let allowed_origins =
         env::var("ALLOWED_ORIGINS").unwrap_or_else(|_| "http://localhost:3000".to_string());
-
-    println!("🔒 CORS allowed origins: {}", allowed_origins);
-
-    println!("🚀 Starting API server on http://{}", bind_address);
-    println!("📝 Routes:");
-    println!("   GET  /health         - Health check");
-    println!("   GET  /search         - Search vector database");
-    println!("   POST /plagiat        - Check text for plagiarism");
-    println!("   GET  /count          - Document count");
-    println!("   GET  /page           - Get all chunks for a page");
-    println!();
-    println!("🔗 Connected to Weaviate at: {}", weaviate_url);
-
-    // Create Weaviate client once at startup
-    let weaviate_client = WeaviateClient::builder(&weaviate_url)
-        .build()
-        .expect("Failed to create Weaviate client");
-
-    let app_state = web::Data::new(AppState { weaviate_client });
+    let qdrant_url = env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6334".to_string());
+    let state = web::Data::new(AppState {
+        qdrant: Qdrant::from_url(&qdrant_url)
+            .build()
+            .expect("failed to create Qdrant client"),
+        http: reqwest::Client::new(),
+        tei_url: env::var("TEI_URL").unwrap_or_else(|_| "http://localhost:8080".to_string()),
+    });
 
     HttpServer::new(move || {
         let cors = if allowed_origins.trim() == "*" {
-            // Allow any origin
             Cors::default()
                 .allow_any_origin()
                 .allow_any_method()
                 .allow_any_header()
-                .expose_headers(vec![actix_web::http::header::CONTENT_TYPE])
-                .max_age(3600)
         } else {
-            // Parse allowed origins from comma-separated list
-            let origins: Vec<&str> = allowed_origins.split(',').map(|s| s.trim()).collect();
-
-            let mut cors = Cors::default()
-                .allowed_methods(vec!["GET", "POST", "OPTIONS"])
-                .allowed_headers(vec![
-                    actix_web::http::header::CONTENT_TYPE,
-                    actix_web::http::header::ACCEPT,
-                    actix_web::http::header::AUTHORIZATION,
-                ])
-                .expose_headers(vec![actix_web::http::header::CONTENT_TYPE])
-                .max_age(3600);
-
-            // Add each origin
-            for origin in origins {
-                cors = cors.allowed_origin(origin);
-            }
-
-            cors
+            allowed_origins
+                .split(',')
+                .fold(Cors::default(), |cors, origin| {
+                    cors.allowed_origin(origin.trim())
+                })
         };
-
         App::new()
             .wrap(cors)
-            .app_data(app_state.clone())
+            .app_data(state.clone())
             .route("/health", web::get().to(health_check))
             .route("/search", web::get().to(search))
             .route("/plagiat", web::post().to(plagiat))
             .route("/count", web::get().to(count))
             .route("/page", web::get().to(get_page))
     })
-    .bind(&bind_address)?
+    .bind(bind_address)?
     .run()
     .await
 }

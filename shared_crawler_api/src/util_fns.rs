@@ -26,12 +26,11 @@ pub fn load_env() {
                         let key = line[..eq].trim();
                         let mut val = line[eq + 1..].trim();
                         // Strip optional surrounding quotes
-                        if (val.starts_with('"') && val.ends_with('"'))
-                            || (val.starts_with('\'') && val.ends_with('\''))
+                        if val.len() >= 2
+                            && ((val.starts_with('"') && val.ends_with('"'))
+                                || (val.starts_with('\'') && val.ends_with('\'')))
                         {
-                            if val.len() >= 2 {
-                                val = &val[1..val.len() - 1];
-                            }
+                            val = &val[1..val.len() - 1];
                         }
                         // Only set if not already present in environment
                         if std::env::var(key).is_err() {

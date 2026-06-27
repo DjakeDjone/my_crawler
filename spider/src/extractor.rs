@@ -9,10 +9,10 @@ pub fn extract_title(document: &Html) -> String {
         .select(&title_selector)
         .next()
         .map(|el| el.text().collect::<String>().trim().to_string())
-        .unwrap_or_else(|| "".to_string())
+        .unwrap_or_default()
 }
 
-pub fn extract_description(document: &Html, content_blocks: &Vec<ContentBlock>) -> String {
+pub fn extract_description(document: &Html, content_blocks: &[ContentBlock]) -> String {
     let max_length = 247;
     let meta_selector = Selector::parse("meta[name='description']").unwrap();
     if let Some(meta) = document.select(&meta_selector).next() {

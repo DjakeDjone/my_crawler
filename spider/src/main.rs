@@ -1,6 +1,6 @@
 use crate::crawl_loop::CrawlLoop;
+use crate::qdrant::PageIndexer;
 use crate::stats::CrawlStats;
-use crate::weaviate::ensure_schema;
 use actix_cors::Cors;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use serde::{Deserialize, Serialize};
@@ -8,21 +8,18 @@ use shared_crawler_api::util_fns::load_env;
 use std::env;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use weaviate_community::WeaviateClient;
 
 pub mod crawl_loop;
-pub mod dedup;
 pub mod extractor;
 pub mod extractor_content;
 pub mod index;
+pub mod qdrant;
 pub mod robots;
-pub mod state;
+pub mod sitemap;
 pub mod stats;
-pub mod weaviate;
 pub mod web_visitor;
 pub mod web_visitor_browser;
 
-const USER_AGENT: &str = "PoliteWebCrawler";
 const REQUEST_TIMEOUT_SECS: u64 = 30;
 
 struct AppState {
@@ -93,7 +90,6 @@ async fn status(app_state: web::Data<AppState>) -> impl Responder {
         "pages_crawled": stats.pages_crawled,
         "pages_failed": stats.pages_failed,
         "pages_skipped_robots": stats.pages_skipped_robots,
-        "pages_skipped_dedup": stats.pages_skipped_dedup,
         "pages_skipped_depth": stats.pages_skipped_depth,
         "retries_attempted": stats.retries_attempted,
     }))
@@ -108,8 +104,13 @@ async fn crawl(
 
     // enqueue the crawl request into the shared CrawlLoop
     {
-        let mut loop_lock = app_state.crawl_loop.lock().await;
-        loop_lock.add_crawl_request(req).await;
+        let loop_lock = app_state.crawl_loop.lock().await;
+        if let Err(error) = loop_lock.add_crawl_request(req).await {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "success": false,
+                "message": error
+            }));
+        }
     }
 
     HttpResponse::Ok().json(CrawlResponse {
@@ -130,21 +131,19 @@ async fn main() -> std::io::Result<()> {
     let host = env::var("SPIDER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let port = env::var("SPIDER_PORT").unwrap_or_else(|_| "8001".to_string());
     let bind_address = format!("{}:{}", host, port);
-    let weaviate_url =
-        env::var("WEAVIATE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
+    let product_token =
+        env::var("CRAWLER_PRODUCT_TOKEN").expect("CRAWLER_PRODUCT_TOKEN must be configured");
+    let user_agent = env::var("CRAWLER_USER_AGENT").expect("CRAWLER_USER_AGENT must be configured");
     let allowed_origins =
         env::var("ALLOWED_ORIGINS").unwrap_or_else(|_| "http://localhost:3000".to_string());
 
     println!("🔒 CORS allowed origins: {}", allowed_origins);
 
-    // Create Weaviate client
-    let weaviate_client = WeaviateClient::builder(&weaviate_url)
-        .build()
-        .expect("Failed to create Weaviate client");
-
-    ensure_schema(&weaviate_client)
+    let indexer = Arc::new(PageIndexer::from_env().expect("failed to create Qdrant client"));
+    indexer
+        .ensure_collection()
         .await
-        .expect("Weaviate schema creation failed!");
+        .expect("Qdrant collection creation failed");
 
     println!("🚀 Starting Crawler server on http://{}", bind_address);
     println!("📝 Routes:");
@@ -152,30 +151,11 @@ async fn main() -> std::io::Result<()> {
     println!("   GET  /status         - Crawler status and metrics");
     println!("   POST /crawl          - Crawl a URL");
     println!();
-    println!("🔗 Connected to Weaviate at: {}", weaviate_url);
-
-    // Create shared stats
     let stats = Arc::new(CrawlStats::new());
 
-    // Create and start a CrawlLoop. We wrap it in an Arc<Mutex<..>> so it can be shared safely
-    // across actix handlers while still allowing mutable access.
-    let crawl_loop = Arc::new(Mutex::new(CrawlLoop::new(stats.clone())));
-    // Set the Weaviate client using the async mutex to avoid blocking the runtime.
-    // We intentionally await the lock here because `main` is async under the actix runtime.
-    {
-        let mut loop_guard = crawl_loop.lock().await;
-        loop_guard.set_weaviate_client(Arc::new(weaviate_client));
-    }
-
-    // Spawn a background task to start the crawl loop's runners. The CrawlLoop::run method
-    // itself spawns background tasks for runners, so we only need to call run() once here.
-    {
-        let crawl_loop_clone = crawl_loop.clone();
-        tokio::spawn(async move {
-            let mut loop_guard = crawl_loop_clone.lock().await;
-            loop_guard.run().await;
-        });
-    }
+    let mut crawl_loop = CrawlLoop::new(stats.clone(), indexer, product_token, user_agent);
+    crawl_loop.run();
+    let crawl_loop = Arc::new(Mutex::new(crawl_loop));
 
     let app_state = web::Data::new(AppState {
         crawl_loop: crawl_loop.clone(),

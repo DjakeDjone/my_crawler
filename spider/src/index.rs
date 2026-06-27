@@ -1,29 +1,61 @@
-use scraper::Html;
-
+use scraper::{Html, Selector};
 use shared_crawler_api::WebPageChunk;
+use url::Url;
 
 use crate::{
     extractor::{calculate_chunk_score, extract_description, extract_title},
     extractor_content::extract_content_blocks,
+    web_visitor::{extract_links, normalize_url, same_origin},
 };
 
-const MIN_CHUNK_TOKENS: usize = 300;
-const MAX_CHUNK_TOKENS: usize = 700;
+const TARGET_CHARS: usize = 800;
+const MAX_CHARS: usize = 1_200;
+const UNBROKEN_CHARS: usize = 450;
 
-/// Estimate token count from text (rough approximation: 1 token ≈ 0.75 words)
-fn estimate_tokens(text: &str) -> usize {
-    let word_count = text.split_whitespace().count();
-    (word_count as f64 * 1.33) as usize // Inverse of 0.75
-}
-
-/// Represents a content block with optional heading
 #[derive(Debug, Clone)]
 pub struct ContentBlock {
     pub heading: Option<String>,
     pub text: String,
 }
 
-/// Split content blocks into chunks of appropriate token size
+pub struct ExtractedPage {
+    pub chunks: Vec<WebPageChunk>,
+    pub links: Vec<Url>,
+    pub canonical: Option<Url>,
+}
+
+pub fn extract_page(url: &Url, html: &str) -> ExtractedPage {
+    let document = Html::parse_document(html);
+    let title = extract_title(&document);
+    let blocks = extract_content_blocks(&document);
+    let description = extract_description(&document, &blocks);
+    let crawled_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let mut chunks = create_chunks(blocks, url.as_str(), &title, &description, crawled_at);
+    for chunk in &mut chunks {
+        chunk.score = calculate_chunk_score(chunk);
+    }
+    ExtractedPage {
+        chunks,
+        links: extract_links(&document, url),
+        canonical: canonical_url(&document, url),
+    }
+}
+
+fn canonical_url(document: &Html, base: &Url) -> Option<Url> {
+    let selector = Selector::parse("link[rel~='canonical'][href]").unwrap();
+    document
+        .select(&selector)
+        .next()?
+        .value()
+        .attr("href")
+        .and_then(|href| base.join(href).ok())
+        .and_then(|url| normalize_url(url.as_str()))
+        .filter(|url| same_origin(base, url))
+}
+
 fn create_chunks(
     blocks: Vec<ContentBlock>,
     url: &str,
@@ -32,217 +64,164 @@ fn create_chunks(
     crawled_at: i64,
 ) -> Vec<WebPageChunk> {
     let mut chunks = Vec::new();
-    let mut current_chunk_text = String::new();
-    let mut current_heading: Option<String> = None;
-    let mut current_tokens = 0;
+    let mut current = String::new();
+    let mut heading = None;
 
     for block in blocks {
-        let block_tokens = estimate_tokens(&block.text);
-
-        // If this block alone exceeds MAX_CHUNK_TOKENS, split it
-        if block_tokens > MAX_CHUNK_TOKENS {
-            // First, save any accumulated content
-            if !current_chunk_text.is_empty() {
-                chunks.push(WebPageChunk::new(
-                    current_chunk_text.trim().to_string(),
-                    current_heading.clone(),
-                    url.to_string(),
-                    title.to_string(),
-                    description.to_string(),
-                    Vec::new(),
-                    Vec::new(),
-                    0.0,
-                    0.0,
+        for piece in split_text(&block.text) {
+            let added = piece.chars().count() + usize::from(!current.is_empty());
+            if !current.is_empty() && current.chars().count() + added > MAX_CHARS {
+                push_chunk(
+                    &mut chunks,
+                    std::mem::take(&mut current),
+                    heading.clone(),
+                    url,
+                    title,
+                    description,
                     crawled_at,
-                ));
-                current_chunk_text.clear();
-                current_tokens = 0;
+                );
             }
-
-            // Split the large block into sentences
-            let sentences = split_into_sentences(&block.text);
-            let mut sentence_chunk = String::new();
-            let mut sentence_tokens = 0;
-
-            for sentence in sentences {
-                let sentence_tokens_count = estimate_tokens(&sentence);
-
-                if sentence_tokens + sentence_tokens_count > MAX_CHUNK_TOKENS
-                    && !sentence_chunk.is_empty()
-                {
-                    chunks.push(WebPageChunk::new(
-                        sentence_chunk.trim().to_string(),
-                        block.heading.clone(),
-                        url.to_string(),
-                        title.to_string(),
-                        description.to_string(),
-                        Vec::new(),
-                        Vec::new(),
-                        0.0,
-                        0.0,
-                        crawled_at,
-                    ));
-                    sentence_chunk.clear();
-                    sentence_tokens = 0;
-                }
-
-                sentence_chunk.push_str(&sentence);
-                sentence_chunk.push(' ');
-                sentence_tokens += sentence_tokens_count;
+            if !current.is_empty() {
+                current.push(' ');
             }
-
-            if !sentence_chunk.is_empty() {
-                chunks.push(WebPageChunk::new(
-                    sentence_chunk.trim().to_string(),
-                    block.heading.clone(),
-                    url.to_string(),
-                    title.to_string(),
-                    description.to_string(),
-                    Vec::new(),
-                    Vec::new(),
-                    0.0,
-                    0.0,
+            current.push_str(&piece);
+            heading = block.heading.clone().or(heading);
+            if current.chars().count() >= TARGET_CHARS {
+                push_chunk(
+                    &mut chunks,
+                    std::mem::take(&mut current),
+                    heading.clone(),
+                    url,
+                    title,
+                    description,
                     crawled_at,
-                ));
+                );
             }
-
-            current_heading = block.heading;
-            continue;
-        }
-
-        // Check if adding this block would exceed MAX_CHUNK_TOKENS
-        if current_tokens + block_tokens > MAX_CHUNK_TOKENS {
-            // If there's already accumulated content, flush it to start a new chunk.
-            // Previously we only flushed when the accumulated chunk met the MIN_CHUNK_TOKENS,
-            // which could cause us to append a block and exceed MAX_CHUNK_TOKENS.
-            if !current_chunk_text.is_empty() && current_tokens > 0 {
-                chunks.push(WebPageChunk::new(
-                    current_chunk_text.trim().to_string(),
-                    current_heading.clone(),
-                    url.to_string(),
-                    title.to_string(),
-                    description.to_string(),
-                    Vec::new(),
-                    Vec::new(),
-                    0.0,
-                    0.0,
-                    crawled_at,
-                ));
-                current_chunk_text.clear();
-                current_tokens = 0;
-            }
-        }
-
-        // Update heading if this block has one
-        if block.heading.is_some() {
-            current_heading = block.heading.clone();
-        }
-
-        // Add block to current chunk
-        if !current_chunk_text.is_empty() {
-            current_chunk_text.push(' ');
-        }
-        current_chunk_text.push_str(&block.text);
-        current_tokens += block_tokens;
-
-        // If we've reached a good chunk size, save it
-        if current_tokens >= MIN_CHUNK_TOKENS {
-            chunks.push(WebPageChunk::new(
-                current_chunk_text.trim().to_string(),
-                current_heading.clone(),
-                url.to_string(),
-                title.to_string(),
-                description.to_string(),
-                Vec::new(),
-                Vec::new(),
-                0.0,
-                0.0,
-                crawled_at,
-            ));
-            current_chunk_text.clear();
-            current_tokens = 0;
         }
     }
-
-    // Save any remaining content
-    if !current_chunk_text.is_empty() {
-        chunks.push(WebPageChunk::new(
-            current_chunk_text.trim().to_string(),
-            current_heading,
-            url.to_string(),
-            title.to_string(),
-            description.to_string(),
-            Vec::new(),
-            Vec::new(),
-            0.0,
-            0.0,
+    if !current.trim().is_empty() {
+        push_chunk(
+            &mut chunks,
+            current,
+            heading,
+            url,
+            title,
+            description,
             crawled_at,
-        ));
+        );
     }
     chunks
 }
 
-/// Split text into sentences
-fn split_into_sentences(text: &str) -> Vec<String> {
-    let mut sentences = Vec::new();
-    let mut current_sentence = String::new();
+fn split_text(text: &str) -> Vec<String> {
+    if text.chars().count() <= MAX_CHARS {
+        return vec![text.to_string()];
+    }
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut pieces = Vec::new();
+    let mut start = 0;
+    while start < chars.len() {
+        let max_end = (start + MAX_CHARS).min(chars.len());
+        let end = if max_end == chars.len() {
+            max_end
+        } else {
+            (start..max_end)
+                .rev()
+                .find(|index| chars[*index].is_whitespace())
+                .filter(|index| *index > start)
+                .unwrap_or((start + UNBROKEN_CHARS).min(chars.len()))
+        };
+        pieces.push(
+            chars[start..end]
+                .iter()
+                .collect::<String>()
+                .trim()
+                .to_string(),
+        );
+        start = end;
+        while start < chars.len() && chars[start].is_whitespace() {
+            start += 1;
+        }
+    }
+    pieces
+}
 
-    for c in text.chars() {
-        current_sentence.push(c);
+#[allow(clippy::too_many_arguments)]
+fn push_chunk(
+    chunks: &mut Vec<WebPageChunk>,
+    content: String,
+    heading: Option<String>,
+    url: &str,
+    title: &str,
+    description: &str,
+    crawled_at: i64,
+) {
+    if content.trim().is_empty() {
+        return;
+    }
+    chunks.push(WebPageChunk::new(
+        content.trim().to_string(),
+        heading,
+        url.to_string(),
+        title.to_string(),
+        description.to_string(),
+        Vec::new(),
+        Vec::new(),
+        0.0,
+        0.0,
+        crawled_at,
+    ));
+}
 
-        if c == '.' || c == '!' || c == '?' {
-            // Check if next char is whitespace or end of string
-            sentences.push(current_sentence.trim().to_string());
-            current_sentence.clear();
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chunks_latin_arabic_and_cjk_by_characters() {
+        for text in [
+            "word ".repeat(500),
+            "مرحبا".repeat(300),
+            "你好世界".repeat(400),
+        ] {
+            let chunks = create_chunks(
+                vec![ContentBlock {
+                    heading: None,
+                    text,
+                }],
+                "https://example.com",
+                "title",
+                "",
+                0,
+            );
+            assert!(!chunks.is_empty());
+            assert!(chunks
+                .iter()
+                .all(|chunk| chunk.chunk_content.chars().count() <= MAX_CHARS));
         }
     }
 
-    if !current_sentence.trim().is_empty() {
-        sentences.push(current_sentence.trim().to_string());
+    #[test]
+    fn unbroken_text_uses_small_splits() {
+        let pieces = split_text(&"界".repeat(1300));
+        assert_eq!(pieces[0].chars().count(), UNBROKEN_CHARS);
     }
 
-    sentences
-}
-
-/// Extract structured data from HTML content and return chunks
-pub fn extract_webpage_data(url: String, html_content: String) -> Vec<WebPageChunk> {
-    let document = Html::parse_document(&html_content);
-
-    let title = extract_title(&document);
-
-    let content_blocks = extract_content_blocks(&document);
-    // println!("content blocks: {:?}", content_blocks);
-
-    // Generate description from first few blocks if not in meta tags
-    let description = extract_description(&document, &content_blocks);
-
-    let crawled_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
-
-    let mut chunks = create_chunks(content_blocks, &url, &title, &description, crawled_at);
-
-    for chunk in &mut chunks {
-        let score = calculate_chunk_score(&chunk);
-        chunk.score = score;
-    }
-
-    // If no chunks were created, create a minimal one
-    if chunks.is_empty() {
-        vec![WebPageChunk::new(
-            "".to_string(),
-            None,
-            url,
-            title,
-            description,
-            Vec::new(),
-            Vec::new(),
-            0.0,
-            0.0,
-            crawled_at,
-        )]
-    } else {
-        chunks
+    #[test]
+    fn keeps_only_same_origin_canonical() {
+        let base = Url::parse("https://example.com/a").unwrap();
+        let page = extract_page(
+            &base,
+            r#"<link rel="canonical" href="/canonical"><p>content</p>"#,
+        );
+        assert_eq!(
+            page.canonical.unwrap().as_str(),
+            "https://example.com/canonical"
+        );
+        let external = extract_page(
+            &base,
+            r#"<link rel="canonical" href="https://other.example/a"><p>content</p>"#,
+        );
+        assert!(external.canonical.is_none());
     }
 }

@@ -1,4 +1,3 @@
-use crate::web_visitor::WebVisitor;
 use anyhow::{Context, Result};
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use futures::StreamExt;
@@ -11,13 +10,13 @@ use tokio::sync::{Mutex, OnceCell};
 ///
 /// This file implements:
 /// - `BrowserPool`: a lazily-initialized shared browser instance. The pool
-///    launches Chromium once, keeps the Browser, and spawns the event handler
-///    polling task so the browser remains functional.
+///   launches Chromium once, keeps the Browser, and spawns the event handler
+///   polling task so the browser remains functional.
 /// - `WebVisitorBrowser`: lightweight façade that delegates fetches to the pool.
 ///
 /// Configuration:
 /// - `SPIDER_BROWSER_HEADLESS` (optional): if set to "false" (case-insensitive)
-///    the browser will be launched with a visible headful window. Default: headless.
+///   the browser will be launched with a visible headful window. Default: headless.
 ///
 /// Notes:
 /// - Reusing a single browser instance drastically reduces startup overhead
@@ -108,12 +107,6 @@ impl BrowserPool {
             .clone()
     }
 
-    /// Fetch a page using the pooled browser instance.
-    /// This mirrors the previous per-call logic but reuses the Browser.
-    pub async fn fetch_page(&self, url: &str) -> Result<String> {
-        self.fetch_page_with_options(url, None, 5000).await
-    }
-
     /// Fetch a page with additional options for waiting on dynamic content.
     /// - `wait_for_selector`: Optional CSS selector to wait for before extracting content
     /// - `timeout_ms`: Timeout in milliseconds for the selector wait
@@ -135,63 +128,63 @@ impl BrowserPool {
             .await
             .context("failed to create new page")?;
 
-        page.goto(url).await.context("failed to navigate to url")?;
+        let result = async {
+            page.goto(url).await.context("failed to navigate to url")?;
+            page.wait_for_navigation()
+                .await
+                .context("navigation did not complete")?;
 
-        // Wait for navigation to finish. Depending on the site you might need to
-        // wait for network idle or a particular selector; this is a generic wait.
-        page.wait_for_navigation()
-            .await
-            .context("navigation did not complete")?;
-
-        // If a wait_for_selector is specified, wait for that element to appear
-        if let Some(selector) = wait_for_selector {
-            let timeout = std::time::Duration::from_millis(timeout_ms);
-            let start = std::time::Instant::now();
-            
-            loop {
-                // Check if the selector exists in the page
-                let found = page
-                    .evaluate(format!(
-                        "document.querySelector('{}') !== null",
-                        selector.replace('\'', "\\'")
-                    ))
-                    .await
-                    .ok()
-                    .and_then(|v| v.into_value::<bool>().ok())
-                    .unwrap_or(false);
-
-                if found {
-                    tracing::debug!("Selector '{}' found on page {}", selector, url);
-                    break;
+            if let Some(selector) = wait_for_selector {
+                let timeout = std::time::Duration::from_millis(timeout_ms);
+                let start = std::time::Instant::now();
+                loop {
+                    let found = page
+                        .evaluate(format!(
+                            "document.querySelector('{}') !== null",
+                            selector.replace('\'', "\\'")
+                        ))
+                        .await
+                        .ok()
+                        .and_then(|v| v.into_value::<bool>().ok())
+                        .unwrap_or(false);
+                    if found {
+                        break;
+                    }
+                    if start.elapsed() >= timeout {
+                        tracing::warn!("Timeout waiting for selector '{selector}' on {url}");
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
-
-                if start.elapsed() >= timeout {
-                    tracing::warn!(
-                        "Timeout waiting for selector '{}' on page {} (waited {}ms)",
-                        selector,
-                        url,
-                        timeout_ms
-                    );
-                    break;
-                }
-
-                // Small delay before checking again
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            page.content()
+                .await
+                .context("failed to retrieve page content")
+        }
+        .await;
+        let closed = page.close().await.context("failed to close browser page");
+        match result {
+            Ok(html) => {
+                closed?;
+                Ok(html)
+            }
+            Err(error) => {
+                let _ = closed;
+                Err(error)
             }
         }
-
-        let html = page
-            .content()
-            .await
-            .context("failed to retrieve page content")?;
-
-        Ok(html)
     }
 }
 
 /// Public lightweight façade used by the crawler. Construction is cheap and
 /// delegates to the shared `BrowserPool`.
 pub struct WebVisitorBrowser;
+
+impl Default for WebVisitorBrowser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl WebVisitorBrowser {
     pub fn new() -> Self {
@@ -210,12 +203,3 @@ impl WebVisitorBrowser {
             .await
     }
 }
-
-impl WebVisitor for WebVisitorBrowser {
-    async fn fetch_page(&self, url: &str) -> Result<String> {
-        // Use the shared pool to fetch the page.
-        let pool = BrowserPool::get().await;
-        pool.fetch_page(url).await
-    }
-}
-
