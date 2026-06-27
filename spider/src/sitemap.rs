@@ -54,13 +54,13 @@ pub async fn discover(
             continue;
         };
         found_pages.retain(|(page, _)| same_origin(seed, page));
-        found_pages.sort_by(|left, right| right.1.cmp(&left.1));
+        found_pages.sort_by_key(|page| std::cmp::Reverse(page.1));
         pages.extend(found_pages.into_iter().map(|(url, _)| url));
         pages.truncate(limit);
 
         if depth < MAX_DEPTH {
             nested.retain(|(map, _)| same_origin(seed, map));
-            nested.sort_by(|left, right| right.1.cmp(&left.1));
+            nested.sort_by_key(|sitemap| std::cmp::Reverse(sitemap.1));
             queue.extend(nested.into_iter().map(|(url, _)| (url, depth + 1)));
         }
     }
