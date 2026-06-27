@@ -1,0 +1,97 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.18.2
+    restart: unless-stopped
+    mem_limit: 700m
+    volumes:
+      - qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6333"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  tei:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
+    command:
+      - --model-id
+      - intfloat/multilingual-e5-small
+      - --port
+      - "80"
+      - --tokenization-workers
+      - "2"
+      - --max-concurrent-requests
+      - "32"
+      - --max-batch-tokens
+      - "4096"
+      - --max-client-batch-size
+      - "16"
+    restart: unless-stopped
+    mem_limit: 1100m
+    volumes:
+      - model-cache:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+  api:
+    image: ghcr.io/djakedjone/my_crawler-api:latest
+    build:
+      context: .
+      target: api
+    restart: unless-stopped
+    mem_limit: 256m
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      QDRANT_URL: http://qdrant:6334
+      TEI_URL: http://tei
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      tei:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  spider:
+    image: ghcr.io/djakedjone/my_crawler-spider:latest
+    build:
+      context: .
+      target: spider
+    restart: unless-stopped
+    mem_limit: 1200m
+    shm_size: 256m
+    environment:
+      SPIDER_HOST: 0.0.0.0
+      SPIDER_PORT: 8001
+      QDRANT_URL: http://qdrant:6334
+      TEI_URL: http://tei
+      CRAWLER_PRODUCT_TOKEN: ${CRAWLER_PRODUCT_TOKEN:?set CRAWLER_PRODUCT_TOKEN}
+      CRAWLER_USER_AGENT: ${CRAWLER_USER_AGENT:?set CRAWLER_USER_AGENT}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+    ports:
+      - "${SPIDER_PORT:-8001}:8001"
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      tei:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8001/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  qdrant-data:
+  model-cache:

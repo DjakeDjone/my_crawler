@@ -24,7 +24,7 @@ Check if the crawler service is running.
 
 ### Crawl URL
 
-Crawl a website starting from a given URL and index the pages into Weaviate.
+Crawl a website starting from a given URL and index the pages into Qdrant.
 
 **Endpoint:** `POST /crawl`
 
@@ -98,7 +98,7 @@ Crawl a website starting from a given URL and index the pages into Weaviate.
    - All links found on the page
    - Crawl timestamp
 
-6. **Indexing**: All crawled pages are automatically indexed into Weaviate with vector embeddings for semantic search.
+6. **Indexing**: Crawled chunks are indexed into Qdrant with TEI dense vectors and native BM25 sparse vectors.
 
 7. **Persistence**: Crawled URLs are stored in RocksDB to track crawling history.
 
@@ -188,9 +188,10 @@ All environment variables can be configured in the `.env` file at the project ro
 - `SPIDER_PORT`: The port to bind the spider server to (default: `8001`)
 - `API_HOST`: The host to bind the API server to (default: `127.0.0.1`)
 - `API_PORT`: The port to bind the API server to (default: `8000`)
-- `WEAVIATE_URL`: The URL of the Weaviate instance (default: `http://localhost:8080`)
-- `WEAVIATE_HOST_PORT`: The port to expose Weaviate on (default: `8080`)
-- `WEAVIATE_GRPC_PORT`: The gRPC port for Weaviate (default: `50051`)
+- `QDRANT_URL`: Qdrant gRPC URL (default: `http://localhost:6334`)
+- `TEI_URL`: Text Embeddings Inference URL (default: `http://localhost:8080`)
+- `CRAWLER_PRODUCT_TOKEN`: robots.txt product token; required by the spider
+- `CRAWLER_USER_AGENT`: descriptive crawler User-Agent; required by the spider
 
 For more details on port configuration, run `./show-ports.sh` or see `PORT_CONFIGURATION.md`.
 

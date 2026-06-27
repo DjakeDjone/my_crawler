@@ -44,19 +44,9 @@ echo "  Port: ${SPIDER_PORT:-8001}"
 echo "  URL:  http://${SPIDER_HOST:-127.0.0.1}:${SPIDER_PORT:-8001}"
 echo ""
 
-echo -e "${GREEN}Weaviate Vector Database:${NC}"
-echo "  HTTP Port: ${WEAVIATE_HOST_PORT:-8080}"
-echo "  gRPC Port: ${WEAVIATE_GRPC_PORT:-50051}"
-echo "  Internal Port: ${WEAVIATE_INTERNAL_PORT:-8080}"
-echo "  Connection URL: ${WEAVIATE_URL:-http://localhost:8080}"
-echo ""
-
-echo -e "${GREEN}Ollama:${NC}"
-if [ -z "$OLLAMA_HOST_PORT" ]; then
-    echo "  Port: Not exposed (internal only)"
-else
-    echo "  Port: $OLLAMA_HOST_PORT"
-fi
+echo -e "${GREEN}Internal services:${NC}"
+echo "  Qdrant: ${QDRANT_URL:-http://qdrant:6334}"
+echo "  TEI: ${TEI_URL:-http://tei}"
 echo ""
 
 # Check for port conflicts
@@ -85,17 +75,11 @@ check_port() {
 
 check_port "${API_PORT:-8000}" "API Server"
 check_port "${SPIDER_PORT:-8001}" "Spider Server"
-check_port "${WEAVIATE_HOST_PORT:-8080}" "Weaviate HTTP"
-check_port "${WEAVIATE_GRPC_PORT:-50051}" "Weaviate gRPC"
-
-if [ ! -z "$OLLAMA_HOST_PORT" ]; then
-    check_port "$OLLAMA_HOST_PORT" "Ollama"
-fi
 
 echo ""
 echo -e "${BLUE}=== Quick Start Commands ===${NC}\n"
-echo "Start Docker services:"
-echo "  cd database && docker-compose up -d"
+echo "Start all services:"
+echo "  docker compose up -d --wait"
 echo ""
 echo "Start API server:"
 echo "  cargo run --bin api"

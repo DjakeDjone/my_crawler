@@ -1,0 +1,8 @@
+target
+.git
+.env
+*.log
+database
+browser-extension
+quick_actions
+*.progress

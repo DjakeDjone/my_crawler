@@ -2,8 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod util_fns;
 
-/// The name of the Weaviate class for web pages
-pub const WEAVIATE_CLASS_NAME: &str = "WebPage";
+pub const QDRANT_COLLECTION_NAME: &str = "web_pages";
 
 /// Field names for the WebPage schema
 pub mod fields {
@@ -42,6 +41,7 @@ pub struct WebPageChunk {
 
 impl WebPageChunk {
     /// Create a new WebPageData instance
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         chunk_content: String,
         chunk_heading: Option<String>,
@@ -68,24 +68,7 @@ impl WebPageChunk {
         }
     }
 
-    /// Get all field names for Weaviate queries
-    pub fn field_names() -> Vec<&'static str> {
-        vec![
-            fields::CHUNK_CONTENT,
-            fields::CHUNK_HEADING,
-            fields::SOURCE_URL,
-            fields::PAGE_TITLE,
-            fields::DESCRIPTION,
-            fields::TAGS,
-            fields::CATEGORIES,
-            fields::PAID,
-            fields::SCORE,
-            fields::CRAWLED_AT,
-        ]
-    }
-
-    /// Convert to JSON for Weaviate object creation
-    pub fn to_properties_json(&self) -> serde_json::Value {
+    pub fn to_payload_json(&self) -> serde_json::Value {
         serde_json::json!({
             fields::CHUNK_CONTENT: self.chunk_content,
             fields::CHUNK_HEADING: self.chunk_heading,
@@ -100,8 +83,7 @@ impl WebPageChunk {
         })
     }
 
-    /// Parse from Weaviate response JSON
-    pub fn from_weaviate_json(value: &serde_json::Value) -> Option<Self> {
+    pub fn from_payload_json(value: &serde_json::Value) -> Option<Self> {
         Some(Self {
             chunk_content: value
                 .get(fields::CHUNK_CONTENT)
@@ -186,22 +168,5 @@ pub struct WebPageResult {
 impl WebPageResult {
     pub fn new(data: WebPageChunk, score: f32) -> Self {
         Self { data, score }
-    }
-
-    /// Parse from Weaviate response JSON with distance
-    pub fn from_weaviate_json(value: &serde_json::Value) -> Option<Self> {
-        let data = WebPageChunk::from_weaviate_json(value)?;
-
-        let score = value
-            .get("_additional")
-            .and_then(|a| a.get("score"))
-            .and_then(|d| {
-                 d.as_f64().map(|f| f as f32).or_else(|| {
-                     d.as_str().and_then(|s| s.parse::<f32>().ok())
-                 })
-            })
-            .unwrap_or(0.0);
-
-        Some(Self { data, score })
     }
 }

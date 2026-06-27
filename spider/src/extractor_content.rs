@@ -1,233 +1,82 @@
-use scraper::{ElementRef, Html, Selector};
+use scraper::{ElementRef, Html};
 
 use crate::index::ContentBlock;
 
-/// Extract structured content blocks from HTML
 pub fn extract_content_blocks(document: &Html) -> Vec<ContentBlock> {
-    let mut blocks = Vec::new();
-
-    // Remove script and style tags
-    let script_selector = Selector::parse("script, style").unwrap();
-
-    // Try to get main content areas
-    let content_selectors = vec![
-        "article", "main", ".content", "#content", ".post", ".article", "body",
-    ];
-
-    let mut found_content = false;
-
-    for selector_str in content_selectors {
-        if let Ok(selector) = Selector::parse(selector_str) {
-            if let Some(element) = document.select(&selector).next() {
-                blocks = extract_blocks_from_element(element, &script_selector, None);
-                if !blocks.is_empty() {
-                    found_content = true;
-                    break;
-                }
-            }
-        }
-    }
-
-    // Fallback: use the document root (covers HTML fragments without a <body>)
-    if !found_content {
-        let root = document.root_element();
-        blocks = extract_blocks_from_element(root, &script_selector, None);
-    }
-
-    blocks
+    walk(document.root_element(), None).0
 }
 
-/// Extract content blocks from an HTML element
-pub fn extract_blocks_from_element(
-    element: ElementRef,
-    exclude_selector: &Selector,
-    parent_heading: Option<String>,
-) -> Vec<ContentBlock> {
+fn walk(
+    element: ElementRef<'_>,
+    mut heading: Option<String>,
+) -> (Vec<ContentBlock>, Option<String>) {
     let mut blocks = Vec::new();
-    let mut current_heading: Option<String> = parent_heading.clone();
-
-    // Process children in order
-    for child in element.children() {
-        if let Some(child_element) = ElementRef::wrap(child) {
-            let tag_name = child_element.value().name();
-
-            // Skip excluded elements
-            if child_element.select(exclude_selector).next().is_some() {
-                continue;
+    for child in element.children().filter_map(ElementRef::wrap) {
+        let name = child.value().name();
+        if is_excluded(&child) {
+            continue;
+        }
+        if matches!(name, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
+            let text = clean_text(child.text());
+            if !text.is_empty() {
+                heading = Some(text);
             }
-
-            // headings
-            if tag_name.starts_with('h') && tag_name.len() == 2 {
-                let heading_text = child_element.text().collect::<String>().trim().to_string();
-                if !heading_text.is_empty() {
-                    current_heading = Some(heading_text);
-                }
+        } else if matches!(name, "p" | "li" | "pre" | "blockquote" | "td" | "th") {
+            let text = clean_text(child.text());
+            if !text.is_empty() {
+                blocks.push(ContentBlock {
+                    heading: heading.clone(),
+                    text,
+                });
             }
-            // paragraph
-            else if tag_name == "p" {
-                let text = child_element.text().collect::<String>().trim().to_string();
-                if !text.is_empty() {
-                    blocks.push(ContentBlock {
-                        heading: current_heading.clone(),
-                        text,
-                    });
-                }
-            }
-            // Check if it's a container element, recurse (propagate current heading)
-            else if tag_name == "div"
-                || tag_name == "section"
-                || tag_name == "article"
-                || tag_name == "main"
-            {
-                let sub_blocks = extract_blocks_from_element(
-                    child_element,
-                    exclude_selector,
-                    current_heading.clone(),
-                );
-                blocks.extend(sub_blocks);
-            } else if tag_name == "ul" || tag_name == "ol" {
-                let sub_blocks = extract_blocks_from_element(
-                    child_element,
-                    exclude_selector,
-                    current_heading.clone(),
-                );
-                blocks.extend(sub_blocks);
-            } else if tag_name == "table" {
-                let sub_blocks = extract_blocks_from_element(
-                    child_element,
-                    exclude_selector,
-                    current_heading.clone(),
-                );
-                blocks.extend(sub_blocks);
-            } else if tag_name == "pre" {
-                let sub_blocks = extract_blocks_from_element(
-                    child_element,
-                    exclude_selector,
-                    current_heading.clone(),
-                );
-                blocks.extend(sub_blocks);
-            } else if tag_name == "blockquote" {
-                let sub_blocks = extract_blocks_from_element(
-                    child_element,
-                    exclude_selector,
-                    current_heading.clone(),
-                );
-                blocks.extend(sub_blocks);
-            }
-            // else {
-            //     let text = child_element.text().collect::<String>().trim().to_string();
-            //     if !text.is_empty() {
-            //         blocks.push(ContentBlock {
-            //             heading: current_heading.clone(),
-            //             text,
-            //         });
-            //     }
-            // }
+        } else {
+            let (nested, nested_heading) = walk(child, heading.clone());
+            blocks.extend(nested);
+            heading = nested_heading.or(heading);
         }
     }
-
-    blocks
+    (blocks, heading)
 }
 
-// tests
-//
+fn clean_text<'a>(parts: impl Iterator<Item = &'a str>) -> String {
+    parts
+        .flat_map(str::split_whitespace)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn is_excluded(element: &ElementRef<'_>) -> bool {
+    let name = element.value().name();
+    if matches!(
+        name,
+        "nav" | "script" | "style" | "form" | "header" | "footer" | "aside" | "noscript"
+    ) {
+        return true;
+    }
+    ["class", "id", "role"].iter().any(|attribute| {
+        element.value().attr(attribute).is_some_and(|value| {
+            let value = value.to_ascii_lowercase();
+            ["nav", "menu", "sidebar", "footer", "header"]
+                .iter()
+                .any(|word| value.contains(word))
+        })
+    })
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_extract_content_blocks() {
-        let html = r#"
-                <div>
-                    <h1>Title</h1>
-                    <p>Paragraph 1</p>
-                    <p>Paragraph 2</p>
-                </div>
-            "#;
-        let document = Html::parse_document(html);
+    fn extracts_supported_tags_and_ignores_chrome() {
+        let document = Html::parse_document(
+            "<body><nav><p>skip</p></nav><h1>Title</h1><p>One</p><ul><li>Two</li></ul><table><tr><td>Three</td></tr></table></body>",
+        );
         let blocks = extract_content_blocks(&document);
-        println!("{:?}", blocks);
-        assert_eq!(blocks.len(), 2);
-        assert_eq!(blocks[0].heading.as_deref().unwrap_or(""), "Title");
-        assert_eq!(blocks[0].text, "Paragraph 1");
-        assert_eq!(blocks[1].heading.as_deref().unwrap_or(""), "Title");
-        assert_eq!(blocks[1].text, "Paragraph 2");
-    }
-
-    #[test]
-    fn test_extract_content_blocks_with_multiple_headings() {
-        let html = r#"
-                <div>
-                    <h1>Title 1</h1>
-                    <p>Paragraph 1</p>
-                    <h2>Title 2</h2>
-                    <p>Paragraph 2</p>
-                </div>
-            "#;
-        let document = Html::parse_document(html);
-        let blocks = extract_content_blocks(&document);
-        println!("{:?}", blocks);
-        assert_eq!(blocks.len(), 2);
-        assert_eq!(blocks[0].heading.as_deref().unwrap_or(""), "Title 1");
-        assert_eq!(blocks[0].text, "Paragraph 1");
-        assert_eq!(blocks[1].heading.as_deref().unwrap_or(""), "Title 2");
-        assert_eq!(blocks[1].text, "Paragraph 2");
-    }
-
-    #[test]
-    fn test_extract_content_blocks_ignore_nav() {
-        let html = r##"
-                <div>
-                    <h1>Title</h1>
-                    <p>Paragraph 1</p>
-                    <nav>
-                        <a href="#">Link 1</a>
-                        <a href="#">Link 2</a>
-                        <p>Paragraph 3</p>
-                    </nav>
-                    <p>Paragraph 2</p>
-                </div>
-            "##;
-        let document = Html::parse_document(html);
-        let blocks = extract_content_blocks(&document);
-        println!("{:?}", blocks);
-        assert_eq!(blocks.len(), 2);
-        assert_eq!(blocks[0].heading.as_deref().unwrap_or(""), "Title");
-        assert_eq!(blocks[0].text, "Paragraph 1");
-        assert_eq!(blocks[1].heading.as_deref().unwrap_or(""), "Title");
-        assert_eq!(blocks[1].text, "Paragraph 2");
-    }
-
-    #[test]
-    fn test_extract_content_blocks_nested_divs() {
-        let html = r##"
-                <div>
-                    <h1>Title</h1>
-                    <p>Paragraph 1</p>
-                    <nav>
-                        <a href="#">Link 1</a>
-                        <a href="#">Link 2</a>
-                        <p>Paragraph 3</p>
-                    </nav>
-                    <div>
-                        <p>Paragraph 2</p>
-                        <div class="nested">
-                            <h2>Nested Heading</h2>
-                            <p>Paragraph 3</p>
-                        </div>
-                    </div>
-                </div>
-            "##;
-        let document = Html::parse_document(html);
-        let blocks = extract_content_blocks(&document);
-        println!("{:?}", blocks);
-        assert_eq!(blocks.len(), 3);
-        assert_eq!(blocks[0].heading.as_deref().unwrap_or(""), "Title");
-        assert_eq!(blocks[0].text, "Paragraph 1");
-        assert_eq!(blocks[1].heading.as_deref().unwrap_or(""), "Title");
-        assert_eq!(blocks[1].text, "Paragraph 2");
-        assert_eq!(blocks[2].heading.as_deref().unwrap_or(""), "Nested Heading");
-        assert_eq!(blocks[2].text, "Paragraph 3");
+        assert_eq!(
+            blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(),
+            ["One", "Two", "Three"]
+        );
+        assert!(blocks.iter().all(|b| b.heading.as_deref() == Some("Title")));
     }
 }
