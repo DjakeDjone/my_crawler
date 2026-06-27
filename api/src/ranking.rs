@@ -131,11 +131,15 @@ pub fn apply_ranking_boosts(results: &mut [WebPageResult], config: &RankingConfi
         apply_ranking_boost(result, config, query);
     }
 
-    // Re-sort by score descending
+    // Root pages are preferred; score orders results within each group.
     results.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        is_domain_root(&b.data.source_url)
+            .cmp(&is_domain_root(&a.data.source_url))
+            .then_with(|| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
     });
 }
 
@@ -237,5 +241,32 @@ mod tests {
         let mut res3 = make_result("https://example.com", "Hello World");
         apply_ranking_boost(&mut res3, &config, "Benjamin");
         assert!(res3.score < 1.0);
+    }
+
+    #[test]
+    fn root_urls_sort_before_subpages() {
+        let make_result = |url: &str, score| WebPageResult {
+            score,
+            data: WebPageChunk {
+                source_url: url.to_string(),
+                page_title: String::new(),
+                chunk_content: String::new(),
+                chunk_heading: None,
+                description: String::new(),
+                tags: vec![],
+                categories: vec![],
+                paid: 0.0,
+                score: 0.0,
+                crawled_at: 0,
+            },
+        };
+        let mut results = [
+            make_result("https://example.com/imprint", 4.65),
+            make_result("https://example.com/", 4.57),
+        ];
+
+        apply_ranking_boosts(&mut results, &RankingConfig::default(), "");
+
+        assert_eq!(results[0].data.source_url, "https://example.com/");
     }
 }
