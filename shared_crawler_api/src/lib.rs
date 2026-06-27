@@ -118,10 +118,8 @@ impl WebPageChunk {
                                 .filter_map(|i| i.as_str().map(|s| s.to_string()))
                                 .collect::<Vec<String>>(),
                         )
-                    } else if let Some(s) = v.as_str() {
-                        Some(vec![s.to_string()])
                     } else {
-                        None
+                        v.as_str().map(|s| vec![s.to_string()])
                     }
                 })
                 .unwrap_or_default(),
@@ -134,10 +132,8 @@ impl WebPageChunk {
                                 .filter_map(|i| i.as_str().map(|s| s.to_string()))
                                 .collect::<Vec<String>>(),
                         )
-                    } else if let Some(s) = v.as_str() {
-                        Some(vec![s.to_string()])
                     } else {
-                        None
+                        v.as_str().map(|s| vec![s.to_string()])
                     }
                 })
                 .unwrap_or_default(),
