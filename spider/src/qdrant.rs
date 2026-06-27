@@ -16,6 +16,7 @@ use std::{collections::HashMap, env};
 use uuid::Uuid;
 
 const BM25_MODEL: &str = "qdrant/bm25";
+const EMBED_BATCH_SIZE: usize = 8;
 
 pub struct PageIndexer {
     qdrant: Qdrant,
@@ -139,17 +140,21 @@ impl PageIndexer {
     }
 
     async fn embed(&self, inputs: &[String]) -> Result<Vec<Vec<f32>>> {
-        let response = self
-            .http
-            .post(format!("{}/embed", self.tei_url.trim_end_matches('/')))
-            .json(&EmbedRequest { inputs })
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<Vec<Vec<f32>>>()
-            .await
-            .context("invalid TEI response")?;
-        Ok(response)
+        let mut embeddings = Vec::with_capacity(inputs.len());
+        for inputs in inputs.chunks(EMBED_BATCH_SIZE) {
+            let mut batch = self
+                .http
+                .post(format!("{}/embed", self.tei_url.trim_end_matches('/')))
+                .json(&EmbedRequest { inputs })
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<Vec<Vec<f32>>>()
+                .await
+                .context("invalid TEI response")?;
+            embeddings.append(&mut batch);
+        }
+        Ok(embeddings)
     }
 }
 
@@ -195,6 +200,7 @@ struct EmbedRequest<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
     fn page_versions_and_ids_are_stable() {
@@ -216,5 +222,79 @@ mod tests {
         let filter = stale_version_filter("u", &version);
         assert_eq!(filter.must.len(), 1);
         assert_eq!(filter.must_not.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn embeds_in_client_sized_batches_and_preserves_order() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut batch_sizes = Vec::new();
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let header_end = loop {
+                    let mut buffer = [0; 4096];
+                    let read = stream.read(&mut buffer).await.unwrap();
+                    request.extend_from_slice(&buffer[..read]);
+                    if let Some(end) = request.windows(4).position(|value| value == b"\r\n\r\n") {
+                        break end + 4;
+                    }
+                };
+                let content_length = String::from_utf8_lossy(&request[..header_end])
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length: ")
+                            .and_then(|value| value.parse::<usize>().ok())
+                    })
+                    .unwrap();
+                while request.len() < header_end + content_length {
+                    let mut buffer = [0; 4096];
+                    let read = stream.read(&mut buffer).await.unwrap();
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                let inputs = serde_json::from_slice::<serde_json::Value>(
+                    &request[header_end..header_end + content_length],
+                )
+                .unwrap()["inputs"]
+                    .as_array()
+                    .unwrap()
+                    .clone();
+                batch_sizes.push(inputs.len());
+                let embeddings = inputs
+                    .iter()
+                    .map(|input| {
+                        let mut vector = vec![0.0; 384];
+                        vector[0] = input.as_str().unwrap().parse().unwrap();
+                        vector
+                    })
+                    .collect::<Vec<_>>();
+                let body = serde_json::to_string(&embeddings).unwrap();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+            batch_sizes
+        });
+
+        let indexer = PageIndexer {
+            qdrant: Qdrant::from_url("http://127.0.0.1:6334").build().unwrap(),
+            http: Client::new(),
+            tei_url: format!("http://{address}"),
+        };
+        let inputs = (0..9).map(|value| value.to_string()).collect::<Vec<_>>();
+        let embeddings = indexer.embed(&inputs).await.unwrap();
+
+        assert_eq!(server.await.unwrap(), vec![8, 1]);
+        assert_eq!(
+            embeddings
+                .iter()
+                .map(|embedding| embedding[0])
+                .collect::<Vec<_>>(),
+            (0..9).map(|value| value as f32).collect::<Vec<_>>()
+        );
     }
 }

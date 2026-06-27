@@ -1,11 +1,11 @@
-use scraper::{Html, Selector};
+use scraper::Html;
 use shared_crawler_api::WebPageChunk;
 use url::Url;
 
 use crate::{
     extractor::{calculate_chunk_score, extract_description, extract_title},
     extractor_content::extract_content_blocks,
-    web_visitor::{extract_links, normalize_url, same_origin},
+    web_visitor::extract_links,
 };
 
 const TARGET_CHARS: usize = 800;
@@ -21,7 +21,6 @@ pub struct ContentBlock {
 pub struct ExtractedPage {
     pub chunks: Vec<WebPageChunk>,
     pub links: Vec<Url>,
-    pub canonical: Option<Url>,
 }
 
 pub fn extract_page(url: &Url, html: &str) -> ExtractedPage {
@@ -40,20 +39,7 @@ pub fn extract_page(url: &Url, html: &str) -> ExtractedPage {
     ExtractedPage {
         chunks,
         links: extract_links(&document, url),
-        canonical: canonical_url(&document, url),
     }
-}
-
-fn canonical_url(document: &Html, base: &Url) -> Option<Url> {
-    let selector = Selector::parse("link[rel~='canonical'][href]").unwrap();
-    document
-        .select(&selector)
-        .next()?
-        .value()
-        .attr("href")
-        .and_then(|href| base.join(href).ok())
-        .and_then(|url| normalize_url(url.as_str()))
-        .filter(|url| same_origin(base, url))
 }
 
 fn create_chunks(
@@ -208,20 +194,9 @@ mod tests {
     }
 
     #[test]
-    fn keeps_only_same_origin_canonical() {
-        let base = Url::parse("https://example.com/a").unwrap();
-        let page = extract_page(
-            &base,
-            r#"<link rel="canonical" href="/canonical"><p>content</p>"#,
-        );
-        assert_eq!(
-            page.canonical.unwrap().as_str(),
-            "https://example.com/canonical"
-        );
-        let external = extract_page(
-            &base,
-            r#"<link rel="canonical" href="https://other.example/a"><p>content</p>"#,
-        );
-        assert!(external.canonical.is_none());
+    fn keeps_fetched_url_when_canonical_points_to_root() {
+        let base = Url::parse("https://example.com/subpage").unwrap();
+        let page = extract_page(&base, r#"<link rel="canonical" href="/"><p>content</p>"#);
+        assert_eq!(page.chunks[0].source_url, "https://example.com/subpage");
     }
 }

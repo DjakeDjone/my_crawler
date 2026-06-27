@@ -206,22 +206,11 @@ async fn crawl_request(
             }
         }
 
-        let mut extracted = extract_page(&final_url, &html);
-        let page_url = extracted
-            .canonical
-            .clone()
-            .unwrap_or_else(|| final_url.clone());
-        if let Some(canonical) = &extracted.canonical {
-            visited.insert(canonical.to_string());
-            queued.remove(canonical.as_str());
-        }
-        for chunk in &mut extracted.chunks {
-            chunk.source_url = page_url.to_string();
-        }
+        let extracted = extract_page(&final_url, &html);
         pages += 1;
         stats.inc_crawled();
         if let Err(error) = indexer.index_page(&extracted.chunks).await {
-            tracing::warn!("failed to index {page_url}: {error}");
+            tracing::warn!("failed to index {final_url}: {error}");
             stats.inc_failed();
         }
 
