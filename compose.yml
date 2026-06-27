@@ -19,15 +19,15 @@ services:
       - --port
       - "80"
       - --tokenization-workers
-      - "2"
+      - "1"
       - --max-concurrent-requests
-      - "32"
+      - "8"
       - --max-batch-tokens
-      - "4096"
+      - "2048"
       - --max-client-batch-size
-      - "16"
+      - "8"
     restart: unless-stopped
-    mem_limit: 1100m
+    mem_limit: 1500m
     volumes:
       - model-cache:/data
     healthcheck:
