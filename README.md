@@ -2,6 +2,8 @@
 
 Rust crawler and search API using Qdrant hybrid retrieval and TEI dense embeddings.
 
+Production operations: [DEPLOYMENT.md](DEPLOYMENT.md)
+
 ## Start
 
 ```bash

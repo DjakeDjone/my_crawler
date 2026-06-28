@@ -65,11 +65,7 @@ struct AppState {
 async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> impl Responder {
     match hybrid_search(&data, &query.query, query.limit.saturating_mul(4)).await {
         Ok(mut results) => {
-            ranking::apply_ranking_boosts(
-                &mut results,
-                &ranking::RankingConfig::default(),
-                &query.query,
-            );
+            ranking::apply_ranking_boosts(&mut results, &query.query);
             let final_results = unique_pages(results, query.limit);
             HttpResponse::Ok().json(SearchResult {
                 total: final_results.len(),
@@ -84,11 +80,33 @@ async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> im
 
 fn unique_pages(results: Vec<WebPageResult>, limit: usize) -> Vec<WebPageResult> {
     let mut seen_urls = HashSet::new();
-    results
+    let unique = results
         .into_iter()
         .filter(|result| seen_urls.insert(result.data.source_url.clone()))
-        .take(limit)
-        .collect()
+        .collect::<Vec<_>>();
+    let mut seen_hosts = HashSet::new();
+    let diverse = unique
+        .iter()
+        .enumerate()
+        .filter(|(_, result)| {
+            let url = &result.data.source_url;
+            let source = url::Url::parse(url)
+                .ok()
+                .and_then(|url| url.host_str().map(str::to_owned))
+                .unwrap_or_else(|| url.clone());
+            seen_hosts.insert(source)
+        })
+        .map(|(index, _)| index)
+        .take(limit.min(5))
+        .collect::<Vec<_>>();
+    let mut remaining = unique.into_iter().map(Some).collect::<Vec<_>>();
+    let mut selected = diverse
+        .into_iter()
+        .map(|index| remaining[index].take().unwrap())
+        .collect::<Vec<_>>();
+    let slots = limit.saturating_sub(selected.len());
+    selected.extend(remaining.into_iter().flatten().take(slots));
+    selected
 }
 
 async fn hybrid_search(
@@ -359,5 +377,63 @@ mod tests {
 
         assert_eq!(pages.len(), 2);
         assert_eq!(pages[1].data.source_url, "https://example.com/a");
+    }
+
+    #[test]
+    fn diversifies_first_five_then_preserves_rank_order() {
+        let urls = [
+            "https://a.example/1",
+            "https://a.example/2",
+            "https://b.example/1",
+            "https://c.example/1",
+            "https://d.example/1",
+            "https://e.example/1",
+            "https://f.example/1",
+        ];
+        let pages = unique_pages(urls.into_iter().map(result).collect(), 7);
+        let actual = pages
+            .iter()
+            .map(|page| page.data.source_url.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actual,
+            [
+                urls[0], urls[2], urls[3], urls[4], urls[5], urls[1], urls[6]
+            ]
+        );
+    }
+
+    #[test]
+    fn fills_from_repeated_hosts_and_handles_malformed_urls() {
+        let urls = [
+            "not a url",
+            "also not a url",
+            "https://example.com/1",
+            "https://example.com/2",
+        ];
+        let pages = unique_pages(urls.into_iter().map(result).collect(), 4);
+
+        assert_eq!(
+            pages
+                .iter()
+                .map(|page| page.data.source_url.as_str())
+                .collect::<Vec<_>>(),
+            urls
+        );
+    }
+
+    #[test]
+    fn diversifies_limits_below_five() {
+        let pages = unique_pages(
+            vec![
+                result("https://a.example/1"),
+                result("https://a.example/2"),
+                result("https://b.example/1"),
+            ],
+            2,
+        );
+
+        assert_eq!(pages[1].data.source_url, "https://b.example/1");
     }
 }

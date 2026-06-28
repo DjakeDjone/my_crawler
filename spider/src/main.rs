@@ -3,7 +3,7 @@ use crate::qdrant::PageIndexer;
 use crate::stats::CrawlStats;
 use actix_cors::Cors;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use shared_crawler_api::util_fns::load_env;
 use std::env;
 use std::sync::Arc;
@@ -60,15 +60,6 @@ fn default_max_depth() -> usize {
     10
 }
 
-#[derive(Debug, Serialize)]
-struct CrawlResponse {
-    success: bool,
-    message: String,
-    pages_crawled: usize,
-    pages_indexed: usize,
-    urls: Vec<String>,
-}
-
 async fn health_check() -> impl Responder {
     HttpResponse::Ok().json(serde_json::json!({
         "status": "ok",
@@ -113,13 +104,10 @@ async fn crawl(
         }
     }
 
-    HttpResponse::Ok().json(CrawlResponse {
-        success: true,
-        message: format!("Queued crawl for {}", url),
-        pages_crawled: 0,
-        pages_indexed: 0,
-        urls: vec![url],
-    })
+    HttpResponse::Ok().json(serde_json::json!({
+        "success": true,
+        "message": format!("Queued crawl for {url}"),
+    }))
 }
 
 #[actix_web::main]

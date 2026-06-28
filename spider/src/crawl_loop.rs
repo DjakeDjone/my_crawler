@@ -18,7 +18,7 @@ use crate::{
     web_visitor::{
         normalize_url, origin, same_origin, FetchError, OriginScheduler, WebVisitorImpl,
     },
-    web_visitor_browser::WebVisitorBrowser,
+    web_visitor_browser::BrowserPool,
     CrawlRequest,
 };
 
@@ -155,15 +155,14 @@ async fn crawl_request(
         }
 
         let fetched = if request.use_browser {
-            WebVisitorBrowser::new()
-                .fetch_page_with_options(
-                    item.url.as_str(),
-                    request.wait_for_selector.as_deref(),
-                    request.wait_timeout_ms,
-                )
-                .await
-                .map(|html| (item.url.clone(), html))
-                .map_err(|error| FetchError::Redirect(error.to_string()))
+            BrowserPool::fetch_page_with_options(
+                item.url.as_str(),
+                request.wait_for_selector.as_deref(),
+                request.wait_timeout_ms,
+            )
+            .await
+            .map(|html| (item.url.clone(), html))
+            .map_err(|error| FetchError::Redirect(error.to_string()))
         } else {
             visitor.fetch_html(item.url.as_str()).await.map(|result| {
                 (
@@ -192,13 +191,12 @@ async fn crawl_request(
         visited.insert(final_url.to_string());
 
         if !request.use_browser && needs_browser(&html) {
-            if let Ok(browser_html) = WebVisitorBrowser::new()
-                .fetch_page_with_options(
-                    final_url.as_str(),
-                    request.wait_for_selector.as_deref(),
-                    request.wait_timeout_ms,
-                )
-                .await
+            if let Ok(browser_html) = BrowserPool::fetch_page_with_options(
+                final_url.as_str(),
+                request.wait_for_selector.as_deref(),
+                request.wait_timeout_ms,
+            )
+            .await
             {
                 if !browser_html.trim().is_empty() {
                     html = browser_html;

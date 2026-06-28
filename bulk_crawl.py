@@ -20,80 +20,19 @@ import os
 import sys
 import time
 from collections import defaultdict
+from itertools import zip_longest
 from pathlib import Path
 from urllib.parse import urlparse
 import requests
 
-# Configuration
-DEFAULT_CONFIG = {
-    "crawler_url": "http://localhost:8001",
-    "max_pages_per_url": 3,
-    "same_domain": True,
-    "use_browser": False,
-    "delay_between_submissions_ms": 200,
-    "delay_between_batches_ms": 2000,
-    "batch_size": 10,
-    "skip_domains": [
-        "localhost",
-        "127.0.0.1",
-        # Search engines
-        "duckduckgo.com",
-        "www.google.com",
-        "search.brave.com",
-        # Auth/login pages
-        "accounts.google.com",
-        "accounts.hetzner.com",
-        "login.microsoftonline.com",
-        # Requires authentication
-        "mail.google.com",
-        "outlook.office.com",
-        "teams.microsoft.com",
-        "lightmailer-bs.gmx.net",
-        "lightmailer-bap.gmx.net",
-        "navigator.gmx.net",
-        "gmx.netid.de",
-        # Media streaming (login required)
-        "music.youtube.com",
-        "www.amazon.de/gp/video",
-        # Already indexed / internal
-        "gemini.google.com",
-        "chatgpt.com",
-    ],
-    "skip_patterns": [
-        "/login",
-        "/signin",
-        "/auth",
-        "/oauth",
-        "?code=",
-        "?token=",
-    ],
-    "browser_domains": [
-        # Domains that need browser rendering
-        "nuxt.com",
-        "ui.nuxt.com",
-        "content.nuxt.com",
-        "vuejs.org",
-        "tiptap.dev",
-    ],
-}
-
-
 def load_config(config_path: str = None) -> dict:
-    """Load configuration from file or use defaults."""
-    config = DEFAULT_CONFIG.copy()
-    
-    if config_path and os.path.exists(config_path):
-        with open(config_path, 'r') as f:
-            user_config = json.load(f)
-            config.update(user_config)
-    
-    # Also check for config in same directory as script
+    """Load checked-in defaults, then optional overrides."""
     default_config_path = Path(__file__).parent / "bulk_crawl_config.json"
-    if default_config_path.exists():
-        with open(default_config_path, 'r') as f:
-            user_config = json.load(f)
-            config.update(user_config)
-    
+    with open(default_config_path) as f:
+        config = json.load(f)
+    if config_path:
+        with open(config_path) as f:
+            config.update(json.load(f))
     return config
 
 
@@ -139,13 +78,8 @@ def needs_browser(url: str, config: dict) -> bool:
 
 def load_urls(filepath: str) -> list[str]:
     """Load URLs from file, one per line."""
-    urls = []
-    with open(filepath, 'r') as f:
-        for line in f:
-            url = line.strip()
-            if url and not url.startswith('#'):
-                urls.append(url)
-    return urls
+    with open(filepath) as f:
+        return [url for line in f if (url := line.strip()) and not url.startswith('#')]
 
 
 def load_progress(progress_file: str) -> set[str]:
@@ -205,24 +139,12 @@ def group_by_domain(urls: list[str]) -> dict[str, list[str]]:
 
 def interleave_domains(domain_groups: dict[str, list[str]]) -> list[str]:
     """Interleave URLs from different domains to spread load."""
-    result = []
-    
-    # Convert to list of iterators
-    iterators = [iter(urls) for urls in domain_groups.values()]
-    
-    while iterators:
-        next_iterators = []
-        for it in iterators:
-            try:
-                url = next(it)
-                result.append(url)
-            except StopIteration:
-                continue
-            else:
-                next_iterators.append(it)
-        iterators = next_iterators
-    
-    return result
+    return [
+        url
+        for row in zip_longest(*domain_groups.values())
+        for url in row
+        if url is not None
+    ]
 
 
 def main():

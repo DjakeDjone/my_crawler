@@ -36,10 +36,6 @@ impl CrawlStats {
         self.pages_skipped_depth.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn inc_retries(&self) {
-        self.retries_attempted.fetch_add(1, Ordering::Relaxed);
-    }
-
     /// Get a snapshot of current stats
     pub fn snapshot(&self) -> StatsSnapshot {
         StatsSnapshot {

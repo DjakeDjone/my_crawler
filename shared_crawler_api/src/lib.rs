@@ -4,39 +4,40 @@ pub mod util_fns;
 
 pub const QDRANT_COLLECTION_NAME: &str = "web_pages";
 
-/// Field names for the WebPage schema
-pub mod fields {
-    pub const CHUNK_CONTENT: &str = "chunk_content";
-    pub const CHUNK_HEADING: &str = "chunk_heading";
-    pub const SOURCE_URL: &str = "source_url";
-    pub const PAGE_TITLE: &str = "page_title";
-    pub const DESCRIPTION: &str = "description";
-    pub const TAGS: &str = "tags";
-    pub const CATEGORIES: &str = "categories";
-    pub const PAID: &str = "paid";
-    pub const SCORE: &str = "score";
-    pub const CRAWLED_AT: &str = "crawled_at";
-}
-
 /// Shared data structure for web page data
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebPageChunk {
-    //
+    #[serde(default)]
     pub chunk_content: String,
+    #[serde(default)]
     pub chunk_heading: Option<String>,
 
-    // for the search results
-    // will be redundant for all chunks of the same page but ok for performance
+    #[serde(default)]
     pub source_url: String,
+    #[serde(default = "default_title")]
     pub page_title: String,
+    #[serde(default = "default_description")]
     pub description: String,
 
-    pub tags: Vec<String>,       // can be provided by crawl request
-    pub categories: Vec<String>, // set by crawler
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub categories: Vec<String>,
 
-    pub paid: f64,  // can be provided by crawl request
-    pub score: f64, // calculated by crawler
+    #[serde(default)]
+    pub paid: f64,
+    #[serde(default)]
+    pub score: f64,
+    #[serde(default)]
     pub crawled_at: i64,
+}
+
+fn default_title() -> String {
+    "No Title".into()
+}
+
+fn default_description() -> String {
+    "No description available".into()
 }
 
 impl WebPageChunk {
@@ -69,87 +70,11 @@ impl WebPageChunk {
     }
 
     pub fn to_payload_json(&self) -> serde_json::Value {
-        serde_json::json!({
-            fields::CHUNK_CONTENT: self.chunk_content,
-            fields::CHUNK_HEADING: self.chunk_heading,
-            fields::SOURCE_URL: self.source_url,
-            fields::PAGE_TITLE: self.page_title,
-            fields::DESCRIPTION: self.description,
-            fields::TAGS: self.tags,
-            fields::CATEGORIES: self.categories,
-            fields::PAID: self.paid,
-            fields::SCORE: self.score,
-            fields::CRAWLED_AT: self.crawled_at,
-        })
+        serde_json::to_value(self).expect("WebPageChunk is serializable")
     }
 
     pub fn from_payload_json(value: &serde_json::Value) -> Option<Self> {
-        Some(Self {
-            chunk_content: value
-                .get(fields::CHUNK_CONTENT)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            chunk_heading: value
-                .get(fields::CHUNK_HEADING)
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            source_url: value
-                .get(fields::SOURCE_URL)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            page_title: value
-                .get(fields::PAGE_TITLE)
-                .and_then(|v| v.as_str())
-                .unwrap_or("No Title")
-                .to_string(),
-            description: value
-                .get(fields::DESCRIPTION)
-                .and_then(|v| v.as_str())
-                .unwrap_or("No description available")
-                .to_string(),
-            tags: value
-                .get(fields::TAGS)
-                .and_then(|v| {
-                    if let Some(arr) = v.as_array() {
-                        Some(
-                            arr.iter()
-                                .filter_map(|i| i.as_str().map(|s| s.to_string()))
-                                .collect::<Vec<String>>(),
-                        )
-                    } else {
-                        v.as_str().map(|s| vec![s.to_string()])
-                    }
-                })
-                .unwrap_or_default(),
-            categories: value
-                .get(fields::CATEGORIES)
-                .and_then(|v| {
-                    if let Some(arr) = v.as_array() {
-                        Some(
-                            arr.iter()
-                                .filter_map(|i| i.as_str().map(|s| s.to_string()))
-                                .collect::<Vec<String>>(),
-                        )
-                    } else {
-                        v.as_str().map(|s| vec![s.to_string()])
-                    }
-                })
-                .unwrap_or_default(),
-            paid: value
-                .get(fields::PAID)
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.0),
-            score: value
-                .get(fields::SCORE)
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.0),
-            crawled_at: value
-                .get(fields::CRAWLED_AT)
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0),
-        })
+        serde_json::from_value(value.clone()).ok()
     }
 }
 

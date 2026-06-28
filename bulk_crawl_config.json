@@ -2,7 +2,6 @@
   "crawler_url": "http://localhost:8001",
   "max_pages_per_url": 3,
   "same_domain": true,
-  "use_browser": false,
   "delay_between_submissions_ms": 200,
   "delay_between_batches_ms": 2000,
   "batch_size": 10,

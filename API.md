@@ -58,10 +58,7 @@ Crawl a website starting from a given URL and index the pages into Qdrant.
 ```json
 {
   "success": true,
-  "message": "Queued crawl for https://example.com",
-  "pages_crawled": 0,
-  "pages_indexed": 0,
-  "urls": ["https://example.com"]
+  "message": "Queued crawl for https://example.com"
 }
 ```
 
