@@ -65,6 +65,7 @@ struct AppState {
 async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> impl Responder {
     match hybrid_search(&data, &query.query, query.limit.saturating_mul(4)).await {
         Ok(mut results) => {
+            results.retain(|result| ranking::is_searchable_page(&result.data.source_url));
             ranking::apply_ranking_boosts(&mut results, &query.query);
             let final_results = unique_pages(results, query.limit);
             HttpResponse::Ok().json(SearchResult {

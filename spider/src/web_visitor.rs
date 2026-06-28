@@ -309,6 +309,18 @@ pub fn normalize_url(value: &str) -> Option<Url> {
     Some(url)
 }
 
+const FILE_EXTENSIONS: &[&str] = &[
+    "jpg", "jpeg", "png", "gif", "webp", "avif", "svg", "ico", "pdf", "zip", "tar", "gz", "7z",
+    "mp3", "wav", "ogg", "mp4", "webm", "mov", "avi", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+];
+
+fn looks_like_file_url(url: &Url) -> bool {
+    url.path_segments()
+        .and_then(Iterator::last)
+        .and_then(|segment| segment.rsplit_once('.').map(|(_, ext)| ext))
+        .is_some_and(|ext| FILE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+}
+
 pub fn extract_links(document: &Html, base_url: &Url) -> Vec<Url> {
     let selector = Selector::parse("a[href]").unwrap();
     document
@@ -323,6 +335,7 @@ pub fn extract_links(document: &Html, base_url: &Url) -> Vec<Url> {
         })
         .filter_map(|href| base_url.join(href).ok())
         .filter_map(|url| normalize_url(url.as_str()))
+        .filter(|url| !looks_like_file_url(url))
         .collect()
 }
 
@@ -339,6 +352,20 @@ mod tests {
                 .unwrap()
                 .as_str(),
             "https://example.com/a?keep=1"
+        );
+    }
+
+    #[test]
+    fn extracts_page_links_and_skips_files() {
+        let document = Html::parse_document(
+            r#"<a href="/page">page</a><a href="/image.jpg">image</a><a href="/file.pdf">pdf</a>"#,
+        );
+        let base = Url::parse("https://example.com/").unwrap();
+        let links = extract_links(&document, &base);
+
+        assert_eq!(
+            links.iter().map(Url::as_str).collect::<Vec<_>>(),
+            ["https://example.com/page"]
         );
     }
 

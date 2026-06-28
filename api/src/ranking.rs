@@ -2,9 +2,15 @@ use shared_crawler_api::WebPageResult;
 use url::Url;
 
 const URL_LENGTH_BOOST_FACTOR: f32 = 0.5;
-const DOMAIN_ROOT_BOOST: f32 = 0.05;
-const PATH_DEPTH_PENALTY: f32 = 0.03;
+const DOMAIN_ROOT_BOOST: f32 = 1.25;
+const PATH_DEPTH_PENALTY: f32 = 0.12;
 const EXACT_MATCH_BOOST: f32 = 3.0;
+const ROOT_HOST_MATCH_BOOST: f32 = 2.0;
+
+const FILE_EXTENSIONS: &[&str] = &[
+    "jpg", "jpeg", "png", "gif", "webp", "avif", "svg", "ico", "pdf", "zip", "tar", "gz", "7z",
+    "mp3", "wav", "ogg", "mp4", "webm", "mov", "avi", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+];
 
 fn query_match_coverage(query: &str, title: &str, url: &str) -> f32 {
     let terms = query
@@ -23,6 +29,14 @@ fn query_match_coverage(query: &str, title: &str, url: &str) -> f32 {
         .map(str::to_lowercase)
         .collect::<Vec<_>>();
     terms.iter().filter(|term| words.contains(term)).count() as f32 / terms.len() as f32
+}
+
+fn query_terms(query: &str) -> Vec<String> {
+    query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|term| !term.is_empty())
+        .map(str::to_lowercase)
+        .collect()
 }
 
 /// Calculate the path depth of a URL (number of non-empty path segments)
@@ -56,6 +70,41 @@ fn is_domain_root(url: &str) -> bool {
     get_path_depth(url) == 0
 }
 
+fn looks_like_file_url(url: &Url) -> bool {
+    url.path_segments()
+        .and_then(Iterator::last)
+        .and_then(|segment| segment.rsplit_once('.').map(|(_, ext)| ext))
+        .is_some_and(|ext| FILE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+}
+
+pub fn is_searchable_page(url: &str) -> bool {
+    Url::parse(url)
+        .map(|url| !looks_like_file_url(&url))
+        .unwrap_or(true)
+}
+
+fn root_host_query_match(query: &str, title: &str, url: &str) -> bool {
+    if !is_domain_root(url) {
+        return false;
+    }
+    let terms = query_terms(query);
+    if terms.is_empty() {
+        return false;
+    }
+    let Ok(parsed) = Url::parse(url) else {
+        return false;
+    };
+    let words = parsed
+        .host_str()
+        .unwrap_or_default()
+        .split(|c: char| !c.is_alphanumeric())
+        .chain(title.split(|c: char| !c.is_alphanumeric()))
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>();
+    terms.iter().all(|term| words.contains(term))
+}
+
 /// Apply all ranking boosts/penalties to a single result
 ///
 /// This modifies the result's score in place based on:
@@ -74,6 +123,10 @@ pub fn apply_ranking_boost(result: &mut WebPageResult, query: &str) {
     // 2. Domain root boost
     if is_domain_root(url) {
         result.score += DOMAIN_ROOT_BOOST;
+    }
+
+    if root_host_query_match(query, title, url) {
+        result.score += ROOT_HOST_MATCH_BOOST;
     }
 
     // 3. Path depth penalty
@@ -153,10 +206,7 @@ mod tests {
         println!("Google Score: {}", google.score);
         println!("Portfolio Score: {}", portfolio.score);
 
-        // With new values:
-        // Google: base 0.5 + (0.5 / 10) + 0.05 = 0.5 + 0.05 + 0.05 = 0.60
-        // Previous was ~0.85
-        assert!(google.score < 0.65);
+        assert!(google.score > portfolio.score);
     }
 
     #[test]
@@ -191,7 +241,7 @@ mod tests {
         // Case 3: No Match
         let mut res3 = make_result("https://example.com", "Hello World");
         apply_ranking_boost(&mut res3, "Benjamin");
-        assert!(res3.score < 1.0);
+        assert!(res3.score < res1.score);
     }
 
     #[test]
@@ -211,7 +261,34 @@ mod tests {
     }
 
     #[test]
-    fn score_outweighs_root_bonus() {
+    fn root_host_query_wins_navigational_searches() {
+        let make_result = |url: &str, score| WebPageResult {
+            score,
+            data: WebPageChunk {
+                source_url: url.to_string(),
+                page_title: "Wikipedia".to_string(),
+                chunk_content: String::new(),
+                chunk_heading: None,
+                description: String::new(),
+                tags: vec![],
+                categories: vec![],
+                paid: 0.0,
+                score: 0.0,
+                crawled_at: 0,
+            },
+        };
+        let mut results = [
+            make_result("https://en.wikipedia.org/wiki/Wikipedia:About", 4.10),
+            make_result("https://en.wikipedia.org/", 3.50),
+        ];
+
+        apply_ranking_boosts(&mut results, "wikipedia");
+
+        assert_eq!(results[0].data.source_url, "https://en.wikipedia.org/");
+    }
+
+    #[test]
+    fn high_semantic_score_can_still_win_unrelated_queries() {
         let make_result = |url: &str, score| WebPageResult {
             score,
             data: WebPageChunk {
@@ -228,12 +305,23 @@ mod tests {
             },
         };
         let mut results = [
-            make_result("https://example.com/imprint", 4.70),
-            make_result("https://example.com/", 4.57),
+            make_result("https://example.com/deep/page", 6.00),
+            make_result("https://example.com/", 3.50),
         ];
 
-        apply_ranking_boosts(&mut results, "");
+        apply_ranking_boosts(&mut results, "rust crawler");
 
-        assert_eq!(results[0].data.source_url, "https://example.com/imprint");
+        assert_eq!(results[0].data.source_url, "https://example.com/deep/page");
+    }
+
+    #[test]
+    fn detects_searchable_pages() {
+        assert!(!is_searchable_page("https://example.com/image.jpg"));
+        assert!(!is_searchable_page("https://example.com/file.pdf"));
+        assert!(is_searchable_page(
+            "https://en.wikipedia.org/wiki/Wikipedia:About"
+        ));
+        assert!(is_searchable_page("https://en.wikipedia.org/"));
+        assert!(is_searchable_page("https://example.com/index.html"));
     }
 }

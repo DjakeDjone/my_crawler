@@ -14,6 +14,7 @@ pub fn extract_title(document: &Html) -> String {
 
 pub fn extract_description(document: &Html, content_blocks: &[ContentBlock]) -> String {
     let max_length = 247;
+    let min_block_length = 20;
     let meta_selector = Selector::parse("meta[name='description']").unwrap();
     if let Some(meta) = document.select(&meta_selector).next() {
         if let Some(content) = meta.value().attr("content") {
@@ -37,17 +38,10 @@ pub fn extract_description(document: &Html, content_blocks: &[ContentBlock]) -> 
 
     let description = content_blocks
         .iter()
-        .map(|f| {
-            if f.heading.is_none() {
-                f.text.clone()
-            } else if f.text.is_empty() {
-                f.heading.clone().unwrap()
-            } else {
-                format!("{}: {}", f.heading.clone().unwrap(), f.text)
-            }
-        })
-        .collect::<Vec<String>>()
-        .join("\n");
+        .map(|block| clean_description_text(&block.text))
+        .filter(|text| text.chars().count() >= min_block_length)
+        .collect::<Vec<_>>()
+        .join(" ");
 
     let mut result = description
         .trim()
@@ -64,6 +58,10 @@ pub fn extract_description(document: &Html, content_blocks: &[ContentBlock]) -> 
     } else {
         result
     }
+}
+
+fn clean_description_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 pub fn calculate_chunk_score(chunk: &WebPageChunk) -> f64 {
@@ -113,5 +111,38 @@ mod tests {
             extract_description(&document, &content_blocks),
             "This is a test page"
         );
+    }
+
+    #[test]
+    fn fallback_description_skips_headings_and_short_noise() {
+        let blocks = vec![
+            ContentBlock {
+                heading: Some("WP:ABT".into()),
+                text: "Short".into(),
+            },
+            ContentBlock {
+                heading: Some("Wikipedia:About".into()),
+                text: "Wikipedia is a free online encyclopedia that anyone can edit.".into(),
+            },
+        ];
+        let document = Html::parse_document("<html></html>");
+
+        assert_eq!(
+            extract_description(&document, &blocks),
+            "Wikipedia is a free online encyclopedia that anyone can edit."
+        );
+    }
+
+    #[test]
+    fn fallback_description_truncates() {
+        let blocks = vec![ContentBlock {
+            heading: None,
+            text: "word ".repeat(100),
+        }];
+        let document = Html::parse_document("<html></html>");
+        let description = extract_description(&document, &blocks);
+
+        assert!(description.ends_with("..."));
+        assert!(description.len() > 247);
     }
 }
