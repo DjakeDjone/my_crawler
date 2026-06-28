@@ -21,6 +21,8 @@ struct SearchQuery {
     query: String,
     #[serde(default = "default_limit")]
     limit: usize,
+    #[serde(default)]
+    offset: usize,
 }
 
 fn default_limit() -> usize {
@@ -64,11 +66,12 @@ struct AppState {
 }
 
 async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> impl Responder {
-    match hybrid_search(&data, &query.query, query.limit.saturating_mul(4)).await {
+    let requested = query.limit.saturating_add(query.offset);
+    match hybrid_search(&data, &query.query, requested.saturating_mul(4)).await {
         Ok(mut results) => {
             results.retain(|result| ranking::is_searchable_page(&result.data.source_url));
             ranking::apply_ranking_boosts(&mut results, &query.query, &data.popularity);
-            let final_results = unique_pages(results, query.limit);
+            let final_results = unique_page(results, query.limit, query.offset);
             HttpResponse::Ok().json(SearchResult {
                 total: final_results.len(),
                 results: final_results,
@@ -78,6 +81,14 @@ async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> im
             error: error.to_string(),
         }),
     }
+}
+
+fn unique_page(results: Vec<WebPageResult>, limit: usize, offset: usize) -> Vec<WebPageResult> {
+    unique_pages(results, limit.saturating_add(offset))
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .collect()
 }
 
 fn unique_pages(results: Vec<WebPageResult>, limit: usize) -> Vec<WebPageResult> {
@@ -446,5 +457,24 @@ mod tests {
         );
 
         assert_eq!(pages[1].data.source_url, "https://b.example/1");
+    }
+
+    #[test]
+    fn offsets_after_deduping_and_diversifying() {
+        let urls = [
+            "https://a.example/1",
+            "https://a.example/1",
+            "https://b.example/1",
+            "https://a.example/2",
+        ];
+        let pages = unique_page(urls.into_iter().map(result).collect(), 2, 1);
+
+        assert_eq!(
+            pages
+                .iter()
+                .map(|page| page.data.source_url.as_str())
+                .collect::<Vec<_>>(),
+            ["https://b.example/1", "https://a.example/2"]
+        );
     }
 }
