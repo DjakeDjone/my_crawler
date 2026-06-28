@@ -6,6 +6,25 @@ const DOMAIN_ROOT_BOOST: f32 = 0.05;
 const PATH_DEPTH_PENALTY: f32 = 0.03;
 const EXACT_MATCH_BOOST: f32 = 3.0;
 
+fn query_match_coverage(query: &str, title: &str, url: &str) -> f32 {
+    let terms = query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|term| !term.is_empty())
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>();
+    if terms.is_empty() {
+        return 0.0;
+    }
+
+    let words = title
+        .split(|c: char| !c.is_alphanumeric())
+        .chain(url.split(|c: char| !c.is_alphanumeric()))
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>();
+    terms.iter().filter(|term| words.contains(term)).count() as f32 / terms.len() as f32
+}
+
 /// Calculate the path depth of a URL (number of non-empty path segments)
 ///
 /// Examples:
@@ -43,7 +62,7 @@ fn is_domain_root(url: &str) -> bool {
 /// 1. URL length boost (shorter URLs rank higher)
 /// 2. Domain root boost (root pages get bonus)
 /// 3. Path depth penalty (deeper pages get penalized)
-/// 4. Exact match boost (query found in title/URL)
+/// 4. Query-term coverage boost (query words found in title/URL)
 pub fn apply_ranking_boost(result: &mut WebPageResult, query: &str) {
     let url = &result.data.source_url;
     let title = &result.data.page_title;
@@ -63,15 +82,7 @@ pub fn apply_ranking_boost(result: &mut WebPageResult, query: &str) {
         result.score -= (depth as f32) * PATH_DEPTH_PENALTY;
     }
 
-    // 4. Exact match boost
-    // Simple case-insensitive check
-    let query_lower = query.to_lowercase();
-    if !query_lower.is_empty()
-        && (url.to_lowercase().contains(&query_lower)
-            || title.to_lowercase().contains(&query_lower))
-    {
-        result.score += EXACT_MATCH_BOOST;
-    }
+    result.score += EXACT_MATCH_BOOST * query_match_coverage(query, title, url);
 }
 
 /// Apply ranking boosts to all results and re-sort by score descending
@@ -181,6 +192,22 @@ mod tests {
         let mut res3 = make_result("https://example.com", "Hello World");
         apply_ranking_boost(&mut res3, "Benjamin");
         assert!(res3.score < 1.0);
+    }
+
+    #[test]
+    fn query_boost_rewards_term_coverage_without_substring_matches() {
+        assert_eq!(
+            query_match_coverage(
+                "rust async crawler",
+                "Building an async Rust service",
+                "https://example.com/guide"
+            ),
+            2.0 / 3.0
+        );
+        assert_eq!(
+            query_match_coverage("rust", "A trustworthy guide", "https://example.com"),
+            0.0
+        );
     }
 
     #[test]
