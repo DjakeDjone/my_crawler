@@ -71,9 +71,9 @@ async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> im
         Ok(mut results) => {
             results.retain(|result| ranking::is_searchable_page(&result.data.source_url));
             ranking::apply_ranking_boosts(&mut results, &query.query, &data.popularity);
-            let final_results = unique_page(results, query.limit, query.offset);
+            let (final_results, total) = search_page(results, query.limit, query.offset);
             HttpResponse::Ok().json(SearchResult {
-                total: final_results.len(),
+                total,
                 results: final_results,
             })
         }
@@ -83,12 +83,19 @@ async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> im
     }
 }
 
-fn unique_page(results: Vec<WebPageResult>, limit: usize, offset: usize) -> Vec<WebPageResult> {
-    unique_pages(results, limit.saturating_add(offset))
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .collect()
+fn search_page(
+    results: Vec<WebPageResult>,
+    limit: usize,
+    offset: usize,
+) -> (Vec<WebPageResult>, usize) {
+    let candidate_count = results.len();
+    let results = unique_pages(results, candidate_count);
+    let total = results.len();
+    (page(results, limit, offset), total)
+}
+
+fn page(results: Vec<WebPageResult>, limit: usize, offset: usize) -> Vec<WebPageResult> {
+    results.into_iter().skip(offset).take(limit).collect()
 }
 
 fn unique_pages(results: Vec<WebPageResult>, limit: usize) -> Vec<WebPageResult> {
@@ -467,8 +474,9 @@ mod tests {
             "https://b.example/1",
             "https://a.example/2",
         ];
-        let pages = unique_page(urls.into_iter().map(result).collect(), 2, 1);
+        let (pages, total) = search_page(urls.into_iter().map(result).collect(), 2, 1);
 
+        assert_eq!(total, 3);
         assert_eq!(
             pages
                 .iter()
