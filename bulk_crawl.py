@@ -257,7 +257,6 @@ def main():
         else:
             failed += 1
         
-        # Rate limiting
         if i < len(ordered_urls):
             if i % config["batch_size"] == 0:
                 print(f"   ⏸️ Batch pause ({config['delay_between_batches_ms']}ms)...")

@@ -1,4 +1,8 @@
-
 /target/
 .env
-browser-extension/crawler_extension.zip
+*.log
+*.progress
+database/
+browser-extension/*.zip
+__pycache__/
+.venv/
