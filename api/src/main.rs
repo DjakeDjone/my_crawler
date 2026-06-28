@@ -44,6 +44,17 @@ fn default_threshold() -> f32 {
 struct SearchResult {
     results: Vec<WebPageResult>,
     total: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    knowledge_panel: Option<KnowledgePanel>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+struct KnowledgePanel {
+    title: String,
+    description: String,
+    source_url: String,
+    tags: Vec<String>,
+    categories: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -71,10 +82,12 @@ async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> im
         Ok(mut results) => {
             results.retain(|result| ranking::is_searchable_page(&result.data.source_url));
             ranking::apply_ranking_boosts(&mut results, &query.query, &data.popularity);
-            let (final_results, total) = search_page(results, query.limit, query.offset);
+            let (final_results, total, knowledge_panel) =
+                search_page(results, query.limit, query.offset);
             HttpResponse::Ok().json(SearchResult {
                 total,
                 results: final_results,
+                knowledge_panel,
             })
         }
         Err(error) => HttpResponse::InternalServerError().json(ErrorResponse {
@@ -87,15 +100,35 @@ fn search_page(
     results: Vec<WebPageResult>,
     limit: usize,
     offset: usize,
-) -> (Vec<WebPageResult>, usize) {
+) -> (Vec<WebPageResult>, usize, Option<KnowledgePanel>) {
     let candidate_count = results.len();
     let results = unique_pages(results, candidate_count);
     let total = results.len();
-    (page(results, limit, offset), total)
+    let knowledge_panel = (offset == 0)
+        .then(|| results.first())
+        .flatten()
+        .and_then(knowledge_panel);
+    (page(results, limit, offset), total, knowledge_panel)
 }
 
 fn page(results: Vec<WebPageResult>, limit: usize, offset: usize) -> Vec<WebPageResult> {
     results.into_iter().skip(offset).take(limit).collect()
+}
+
+fn knowledge_panel(result: &WebPageResult) -> Option<KnowledgePanel> {
+    let title = result.data.page_title.trim();
+    let description = result.data.description.trim();
+    if title.is_empty() || title == "No Title" || description.is_empty() {
+        return None;
+    }
+
+    Some(KnowledgePanel {
+        title: title.to_string(),
+        description: description.to_string(),
+        source_url: result.data.source_url.clone(),
+        tags: result.data.tags.clone(),
+        categories: result.data.categories.clone(),
+    })
 }
 
 fn unique_pages(results: Vec<WebPageResult>, limit: usize) -> Vec<WebPageResult> {
@@ -393,6 +426,13 @@ mod tests {
         )
     }
 
+    fn described_result(url: &str) -> WebPageResult {
+        let mut result = result(url);
+        result.data.description = "Short summary".to_string();
+        result.data.tags = vec!["rust".to_string()];
+        result
+    }
+
     #[test]
     fn keeps_same_title_pages_and_removes_duplicate_chunks() {
         let pages = unique_pages(
@@ -474,15 +514,40 @@ mod tests {
             "https://b.example/1",
             "https://a.example/2",
         ];
-        let (pages, total) = search_page(urls.into_iter().map(result).collect(), 2, 1);
+        let (pages, total, knowledge_panel) =
+            search_page(urls.into_iter().map(result).collect(), 2, 1);
 
         assert_eq!(total, 3);
+        assert_eq!(knowledge_panel, None);
         assert_eq!(
             pages
                 .iter()
                 .map(|page| page.data.source_url.as_str())
                 .collect::<Vec<_>>(),
             ["https://b.example/1", "https://a.example/2"]
+        );
+    }
+
+    #[test]
+    fn adds_knowledge_panel_from_first_page_result() {
+        let (_pages, _total, knowledge_panel) = search_page(
+            vec![
+                described_result("https://example.com/"),
+                described_result("https://example.com/about"),
+            ],
+            10,
+            0,
+        );
+
+        assert_eq!(
+            knowledge_panel,
+            Some(KnowledgePanel {
+                title: "Same title".to_string(),
+                description: "Short summary".to_string(),
+                source_url: "https://example.com/".to_string(),
+                tags: vec!["rust".to_string()],
+                categories: vec![],
+            })
         );
     }
 }
