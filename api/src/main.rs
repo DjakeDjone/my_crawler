@@ -60,13 +60,14 @@ struct AppState {
     qdrant: Qdrant,
     http: reqwest::Client,
     tei_url: String,
+    popularity: ranking::DomainPopularity,
 }
 
 async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> impl Responder {
     match hybrid_search(&data, &query.query, query.limit.saturating_mul(4)).await {
         Ok(mut results) => {
             results.retain(|result| ranking::is_searchable_page(&result.data.source_url));
-            ranking::apply_ranking_boosts(&mut results, &query.query);
+            ranking::apply_ranking_boosts(&mut results, &query.query, &data.popularity);
             let final_results = unique_pages(results, query.limit);
             HttpResponse::Ok().json(SearchResult {
                 total: final_results.len(),
@@ -308,12 +309,21 @@ async fn main() -> std::io::Result<()> {
     let allowed_origins =
         env::var("ALLOWED_ORIGINS").unwrap_or_else(|_| "http://localhost:3000".to_string());
     let qdrant_url = env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6334".to_string());
+    let http = reqwest::Client::new();
+    let popularity = match ranking::load_domain_popularity(&http).await {
+        Ok(popularity) => popularity,
+        Err(error) => {
+            eprintln!("failed to load Tranco popularity list: {error}");
+            ranking::DomainPopularity::default()
+        }
+    };
     let state = web::Data::new(AppState {
         qdrant: Qdrant::from_url(&qdrant_url)
             .build()
             .expect("failed to create Qdrant client"),
-        http: reqwest::Client::new(),
+        http,
         tei_url: env::var("TEI_URL").unwrap_or_else(|_| "http://localhost:8080".to_string()),
+        popularity,
     });
 
     HttpServer::new(move || {
