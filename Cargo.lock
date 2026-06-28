@@ -263,7 +263,6 @@ dependencies = [
  "serde",
  "serde_json",
  "shared_crawler_api",
- "strsim",
  "tokio",
  "url",
 ]

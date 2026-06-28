@@ -9,8 +9,10 @@ use qdrant_client::{
 };
 use serde::{Deserialize, Serialize};
 use shared_crawler_api::{QDRANT_COLLECTION_NAME, WebPageChunk, WebPageResult, util_fns::load_env};
-use std::{collections::HashMap, env};
-use strsim::normalized_levenshtein;
+use std::{
+    collections::{HashMap, HashSet},
+    env,
+};
 
 mod ranking;
 
@@ -68,21 +70,7 @@ async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> im
                 &ranking::RankingConfig::default(),
                 &query.query,
             );
-            let mut final_results = Vec::new();
-            let mut seen_titles: Vec<String> = Vec::new();
-            for result in results {
-                if final_results.len() >= query.limit {
-                    break;
-                }
-                let title = result.data.page_title.to_lowercase();
-                if seen_titles
-                    .iter()
-                    .all(|seen| normalized_levenshtein(&title, seen) <= 0.8)
-                {
-                    seen_titles.push(title);
-                    final_results.push(result);
-                }
-            }
+            let final_results = unique_pages(results, query.limit);
             HttpResponse::Ok().json(SearchResult {
                 total: final_results.len(),
                 results: final_results,
@@ -92,6 +80,15 @@ async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> im
             error: error.to_string(),
         }),
     }
+}
+
+fn unique_pages(results: Vec<WebPageResult>, limit: usize) -> Vec<WebPageResult> {
+    let mut seen_urls = HashSet::new();
+    results
+        .into_iter()
+        .filter(|result| seen_urls.insert(result.data.source_url.clone()))
+        .take(limit)
+        .collect()
 }
 
 async fn hybrid_search(
@@ -325,4 +322,42 @@ async fn main() -> std::io::Result<()> {
     .bind(bind_address)?
     .run()
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn result(url: &str) -> WebPageResult {
+        WebPageResult::new(
+            WebPageChunk {
+                chunk_content: String::new(),
+                chunk_heading: None,
+                source_url: url.to_string(),
+                page_title: "Same title".to_string(),
+                description: String::new(),
+                tags: vec![],
+                categories: vec![],
+                paid: 0.0,
+                score: 0.0,
+                crawled_at: 0,
+            },
+            0.0,
+        )
+    }
+
+    #[test]
+    fn keeps_same_title_pages_and_removes_duplicate_chunks() {
+        let pages = unique_pages(
+            vec![
+                result("https://example.com/"),
+                result("https://example.com/a"),
+                result("https://example.com/a"),
+            ],
+            10,
+        );
+
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[1].data.source_url, "https://example.com/a");
+    }
 }
