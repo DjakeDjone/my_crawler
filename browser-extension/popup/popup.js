@@ -1,10 +1,10 @@
 const settings = {
     CRAWL_URL: 'https://api.search.fri3dl.dev/crawler/crawl',
-    DEPTH: 1,
+    MAX_DEPTH: 1,
     MAX_PAGES: 12
 }
 
-const crawl = async (url, depth, maxPages) => {
+const crawl = async (url, maxDepth, maxPages) => {
     try {
         const response = await fetch(settings.CRAWL_URL, {
             method: 'POST',
@@ -13,7 +13,7 @@ const crawl = async (url, depth, maxPages) => {
             },
             body: JSON.stringify({
                 url,
-                depth: depth || settings.DEPTH,
+                max_depth: maxDepth || settings.MAX_DEPTH,
                 max_pages: maxPages || settings.MAX_PAGES
             }),
         });
@@ -46,7 +46,7 @@ chrome.tabs.query({ active: true, currentWindow: true }).then(tabs => {
 // Handle crawl button click
 document.getElementById('crawl-btn').addEventListener('click', async () => {
     const urlInput = document.getElementById('url-input');
-    const depthInput = document.getElementById('depth');
+    const maxDepthInput = document.getElementById('max-depth');
     const maxPagesInput = document.getElementById('max-pages');
     const statusDiv = document.getElementById('status');
     const crawlBtn = document.getElementById('crawl-btn');
@@ -75,10 +75,10 @@ document.getElementById('crawl-btn').addEventListener('click', async () => {
     statusDiv.style.color = 'var(--text)';
 
     // Perform crawl
-    const depth = parseInt(depthInput.value) || settings.DEPTH;
+    const maxDepth = parseInt(maxDepthInput.value) || settings.MAX_DEPTH;
     const maxPages = parseInt(maxPagesInput.value) || settings.MAX_PAGES;
     
-    const result = await crawl(url, depth, maxPages);
+    const result = await crawl(url, maxDepth, maxPages);
 
     // Re-enable button
     crawlBtn.disabled = false;
@@ -86,7 +86,7 @@ document.getElementById('crawl-btn').addEventListener('click', async () => {
 
     // Show result
     if (result.success) {
-        statusDiv.textContent = 'Crawl completed successfully!';
+        statusDiv.textContent = 'Crawl queued successfully!';
         statusDiv.classList.remove('error');
         statusDiv.classList.add('success');
     } else {

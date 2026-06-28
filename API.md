@@ -36,7 +36,8 @@ Crawl a website starting from a given URL and index the pages into Qdrant.
   "same_domain": true,
   "use_browser": false,
   "wait_for_selector": null,
-  "wait_timeout_ms": 5000
+  "wait_timeout_ms": 5000,
+  "max_depth": 10
 }
 ```
 
@@ -47,6 +48,7 @@ Crawl a website starting from a given URL and index the pages into Qdrant.
 - `use_browser` (boolean, optional): Force browser-based crawling for JavaScript-heavy sites. Default is `false`.
 - `wait_for_selector` (string, optional): CSS selector to wait for before extracting content. Useful for dynamic SPAs. Default is `null`.
 - `wait_timeout_ms` (integer, optional): Timeout in milliseconds for `wait_for_selector`. Default is `5000`.
+- `max_depth` (integer, optional): Maximum link depth from the starting URL. Default is `10`.
 
 **Browser Crawling Notes:**
 - When `use_browser` is `true`, all pages are fetched using a headless Chromium browser
@@ -65,14 +67,8 @@ Crawl a website starting from a given URL and index the pages into Qdrant.
 **Response (Error - Invalid URL):**
 ```json
 {
-  "error": "Invalid URL: relative URL without a base"
-}
-```
-
-**Response (Error - Schema Initialization):**
-```json
-{
-  "error": "Failed to initialize database schema: connection error"
+  "success": false,
+  "message": "invalid HTTP(S) URL"
 }
 ```
 
@@ -96,8 +92,6 @@ Crawl a website starting from a given URL and index the pages into Qdrant.
    - Crawl timestamp
 
 6. **Indexing**: Crawled chunks are indexed into Qdrant with TEI dense vectors and native BM25 sparse vectors.
-
-7. **Persistence**: Crawled URLs are stored in RocksDB to track crawling history.
 
 ### Limitations
 
@@ -141,13 +135,13 @@ curl -X POST http://localhost:8001/crawl \
 ### Using JavaScript/Fetch
 
 ```javascript
-async function crawlWebsite(url, depth = 1) {
+async function crawlWebsite(url, maxDepth = 1) {
   const response = await fetch('http://localhost:8001/crawl', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ url, depth }),
+    body: JSON.stringify({ url, max_pages: 50, max_depth: maxDepth }),
   });
   
   const result = await response.json();
@@ -156,7 +150,7 @@ async function crawlWebsite(url, depth = 1) {
 
 // Usage
 crawlWebsite('https://example.com', 2)
-  .then(result => console.log('Crawl complete:', result))
+  .then(result => console.log('Crawl queued:', result))
   .catch(error => console.error('Crawl failed:', error));
 ```
 
@@ -165,16 +159,16 @@ crawlWebsite('https://example.com', 2)
 ```python
 import requests
 
-def crawl_website(url, depth=1):
+def crawl_website(url, max_depth=1):
     response = requests.post(
         'http://localhost:8001/crawl',
-        json={'url': url, 'depth': depth}
+        json={'url': url, 'max_pages': 50, 'max_depth': max_depth}
     )
     return response.json()
 
 # Usage
-result = crawl_website('https://example.com', depth=2)
-print(f"Crawled {result['pages_crawled']} pages")
+result = crawl_website('https://example.com', max_depth=2)
+print(result['message'])
 ```
 
 ## Environment Variables
@@ -196,5 +190,4 @@ For more details on port configuration, run `./show-ports.sh` or see `PORT_CONFI
 
 - The crawler respects HTTP status codes and will skip pages that return errors
 - Pages are indexed asynchronously, so the crawler doesn't block on indexing failures
-- The User-Agent is set to `PoliteWebCrawler`
 - Request timeout is set to 30 seconds per page
