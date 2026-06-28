@@ -16,6 +16,8 @@ use std::{
 
 mod ranking;
 
+const SEARCH_CANDIDATE_LIMIT: usize = 100;
+
 #[derive(Debug, Deserialize)]
 struct SearchQuery {
     query: String,
@@ -66,8 +68,7 @@ struct AppState {
 }
 
 async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> impl Responder {
-    let requested = query.limit.saturating_add(query.offset);
-    match hybrid_search(&data, &query.query, requested.saturating_mul(4)).await {
+    match hybrid_search(&data, &query.query, SEARCH_CANDIDATE_LIMIT).await {
         Ok(mut results) => {
             results.retain(|result| ranking::is_searchable_page(&result.data.source_url));
             ranking::apply_ranking_boosts(&mut results, &query.query, &data.popularity);
@@ -91,11 +92,29 @@ fn search_page(
     let candidate_count = results.len();
     let results = unique_pages(results, candidate_count);
     let total = results.len();
-    (page(results, limit, offset), total)
+    let results = page(results, limit, offset)
+        .into_iter()
+        .map(clean_result)
+        .collect();
+    (results, total)
 }
 
 fn page(results: Vec<WebPageResult>, limit: usize, offset: usize) -> Vec<WebPageResult> {
     results.into_iter().skip(offset).take(limit).collect()
+}
+
+fn clean_result(mut result: WebPageResult) -> WebPageResult {
+    result.data.description = clean_htmlish_text(&result.data.description);
+    result
+}
+
+fn clean_htmlish_text(text: &str) -> String {
+    text.replace("<br>", " ")
+        .replace("<br/>", " ")
+        .replace("<br />", " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn unique_pages(results: Vec<WebPageResult>, limit: usize) -> Vec<WebPageResult> {
@@ -484,5 +503,28 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["https://b.example/1", "https://a.example/2"]
         );
+    }
+
+    #[test]
+    fn total_does_not_depend_on_offset() {
+        let urls = [
+            "https://a.example/1",
+            "https://b.example/1",
+            "https://c.example/1",
+        ];
+        let (_, first_page_total) = search_page(urls.into_iter().map(result).collect(), 1, 0);
+        let (_, second_page_total) = search_page(urls.into_iter().map(result).collect(), 1, 1);
+
+        assert_eq!(first_page_total, second_page_total);
+    }
+
+    #[test]
+    fn strips_literal_break_tags_from_descriptions() {
+        let mut result = result("https://example.com/");
+        result.data.description = "D&D stuff <br> Jetzt spielen!".to_string();
+
+        let (pages, _) = search_page(vec![result], 1, 0);
+
+        assert_eq!(pages[0].data.description, "D&D stuff Jetzt spielen!");
     }
 }
