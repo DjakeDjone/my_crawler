@@ -1,0 +1,6 @@
+{
+  "max_pages_per_url": 1000,
+  "delay_between_submissions_ms": 200,
+  "delay_between_batches_ms": 2000,
+  "batch_size": 20
+}

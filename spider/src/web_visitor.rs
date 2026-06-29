@@ -211,7 +211,9 @@ impl WebVisitorImpl {
                     .ok_or_else(|| FetchError::Redirect("missing Location".to_string()))?;
                 url = url
                     .join(location)
-                    .map_err(|_| FetchError::Redirect(location.to_string()))?;
+                    .ok()
+                    .and_then(|url| normalize_url(url.as_str()))
+                    .ok_or_else(|| FetchError::Redirect(location.to_string()))?;
                 continue;
             }
 
@@ -294,18 +296,7 @@ pub fn normalize_url(value: &str) -> Option<Url> {
     {
         let _ = url.set_port(None);
     }
-    let kept = url
-        .query_pairs()
-        .filter(|(key, _)| {
-            let key = key.to_ascii_lowercase();
-            !key.starts_with("utm_") && key != "gclid" && key != "fbclid"
-        })
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
-        .collect::<Vec<_>>();
     url.set_query(None);
-    if !kept.is_empty() {
-        url.query_pairs_mut().extend_pairs(kept);
-    }
     Some(url)
 }
 
@@ -351,7 +342,7 @@ mod tests {
             normalize_url("https://example.com:443/a?utm_source=x&keep=1#part")
                 .unwrap()
                 .as_str(),
-            "https://example.com/a?keep=1"
+            "https://example.com/a"
         );
     }
 

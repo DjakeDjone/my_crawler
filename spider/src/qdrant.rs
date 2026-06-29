@@ -16,7 +16,8 @@ use std::{collections::HashMap, env};
 use uuid::Uuid;
 
 const BM25_MODEL: &str = "qdrant/bm25";
-const EMBED_BATCH_SIZE: usize = 8;
+// ponytail: one chunk per TEI request avoids max-batch-token 422s; raise after TEI limits are tuned.
+const EMBED_BATCH_SIZE: usize = 1;
 
 pub struct PageIndexer {
     qdrant: Qdrant,
@@ -228,9 +229,11 @@ mod tests {
     async fn embeds_in_client_sized_batches_and_preserves_order() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let inputs = (0..9).map(|value| value.to_string()).collect::<Vec<_>>();
+        let expected_requests = inputs.len();
         let server = tokio::spawn(async move {
             let mut batch_sizes = Vec::new();
-            for _ in 0..2 {
+            for _ in 0..expected_requests {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 let mut request = Vec::new();
                 let header_end = loop {
@@ -285,10 +288,9 @@ mod tests {
             http: Client::new(),
             tei_url: format!("http://{address}"),
         };
-        let inputs = (0..9).map(|value| value.to_string()).collect::<Vec<_>>();
         let embeddings = indexer.embed(&inputs).await.unwrap();
 
-        assert_eq!(server.await.unwrap(), vec![8, 1]);
+        assert_eq!(server.await.unwrap(), vec![1; inputs.len()]);
         assert_eq!(
             embeddings
                 .iter()

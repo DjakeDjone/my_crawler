@@ -60,6 +60,9 @@ impl CrawlLoop {
 
     pub async fn add_crawl_request(&self, mut request: CrawlRequest) -> Result<(), String> {
         let seed = normalize_url(&request.url).ok_or_else(|| "invalid HTTP(S) URL".to_string())?;
+        if is_crawl_trap(&seed) {
+            return Err("login/signup/search URLs are not crawlable".to_string());
+        }
         request.url = seed.to_string();
         self.requests.lock().await.push_back(request);
         Ok(())
@@ -198,6 +201,9 @@ async fn crawl_request(
             }
         };
         visited.insert(final_url.to_string());
+        if is_crawl_trap(&final_url) {
+            continue;
+        }
 
         if !request.use_browser && needs_browser(&html) {
             if let Ok(browser_html) = BrowserPool::fetch_page_with_options(
@@ -230,9 +236,7 @@ async fn crawl_request(
             if request.same_domain && !same_origin(&seed, &link) {
                 continue;
             }
-            if !is_crawl_trap(&link) {
-                enqueue(&mut frontier, &mut queued, &visited, link, item.depth + 1);
-            }
+            enqueue(&mut frontier, &mut queued, &visited, link, item.depth + 1);
         }
     }
     tracing::info!(
@@ -258,6 +262,9 @@ fn enqueue(
     url: Url,
     depth: usize,
 ) {
+    if is_crawl_trap(&url) {
+        return;
+    }
     let key = url.to_string();
     if !visited.contains(&key) && queued.insert(key) {
         frontier.push_back(QueuedUrl { url, depth });
@@ -278,20 +285,12 @@ fn needs_browser(html: &str) -> bool {
 
 fn is_crawl_trap(url: &Url) -> bool {
     let path = url.path().to_ascii_lowercase();
-    if ["login", "logout", "signin", "signout", "search", "calendar"]
-        .iter()
-        .any(|part| path.split('/').any(|segment| segment == *part))
-    {
-        return true;
-    }
-    let pairs = url.query_pairs().collect::<Vec<_>>();
-    pairs.len() > 5
-        || pairs.iter().any(|(key, _)| {
-            matches!(
-                key.to_ascii_lowercase().as_str(),
-                "filter" | "facet" | "sort" | "page" | "calendar"
-            )
-        })
+    [
+        "login", "logout", "signin", "signout", "sign-in", "sign-out", "sign_in", "sign_out",
+        "signup", "sign-up", "sign_up", "register", "search", "calendar",
+    ]
+    .iter()
+    .any(|part| path.split('/').any(|segment| segment == *part))
 }
 
 #[cfg(test)]
@@ -303,8 +302,39 @@ mod tests {
         assert!(is_crawl_trap(
             &Url::parse("https://example.com/search?q=x").unwrap()
         ));
+        assert!(is_crawl_trap(
+            &Url::parse("https://example.com/users/sign_in").unwrap()
+        ));
+        assert!(is_crawl_trap(
+            &Url::parse("https://example.com/signup").unwrap()
+        ));
         assert!(!is_crawl_trap(
             &Url::parse("https://example.com/article?id=1").unwrap()
         ));
+    }
+
+    #[test]
+    fn enqueue_skips_crawl_traps() {
+        let mut frontier = VecDeque::new();
+        let mut queued = HashSet::new();
+        let visited = HashSet::new();
+
+        enqueue(
+            &mut frontier,
+            &mut queued,
+            &visited,
+            Url::parse("https://example.com/login").unwrap(),
+            1,
+        );
+        enqueue(
+            &mut frontier,
+            &mut queued,
+            &visited,
+            Url::parse("https://example.com/article").unwrap(),
+            1,
+        );
+
+        assert_eq!(frontier.len(), 1);
+        assert_eq!(frontier[0].url.as_str(), "https://example.com/article");
     }
 }
