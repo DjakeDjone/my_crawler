@@ -25,6 +25,28 @@ async fn six_language_search_benchmark() {
             .json::<Value>()
             .await
             .unwrap();
-        assert!(response["results"].is_array(), "{query}");
+        let results = response["results"].as_array().unwrap();
+        assert!(!results.is_empty(), "{query}");
+        assert!(
+            results
+                .iter()
+                .any(|result| result_text(result).contains("rust")),
+            "{query}: expected at least one top result to mention Rust"
+        );
     }
+}
+
+fn result_text(result: &Value) -> String {
+    [
+        "source_url",
+        "page_title",
+        "description",
+        "chunk_heading",
+        "chunk_content",
+    ]
+    .into_iter()
+    .filter_map(|key| result[key].as_str())
+    .collect::<Vec<_>>()
+    .join(" ")
+    .to_lowercase()
 }

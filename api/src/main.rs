@@ -25,6 +25,10 @@ struct SearchQuery {
     offset: usize,
 }
 
+const MAX_SEARCH_LIMIT: usize = 50;
+const MAX_SEARCH_OFFSET: usize = 200;
+const SEARCH_PREFETCH_MULTIPLIER: usize = 4;
+
 fn default_limit() -> usize {
     10
 }
@@ -76,14 +80,36 @@ struct AppState {
     popularity: ranking::DomainPopularity,
 }
 
+struct PreparedSearch {
+    query: String,
+    limit: usize,
+    offset: usize,
+    candidate_limit: usize,
+}
+
 async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> impl Responder {
-    let requested = query.limit.saturating_add(query.offset);
-    match hybrid_search(&data, &query.query, requested.saturating_mul(4)).await {
+    let prepared = match prepare_search_query(&query) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            return HttpResponse::BadRequest().json(ErrorResponse {
+                error: error.to_string(),
+            });
+        }
+    };
+    if prepared.candidate_limit == 0 {
+        return HttpResponse::Ok().json(SearchResult {
+            total: 0,
+            results: Vec::new(),
+            knowledge_panel: None,
+        });
+    }
+
+    match hybrid_search(&data, &prepared.query, prepared.candidate_limit).await {
         Ok(mut results) => {
             results.retain(|result| ranking::is_searchable_page(&result.data.source_url));
-            ranking::apply_ranking_boosts(&mut results, &query.query, &data.popularity);
+            ranking::apply_ranking_boosts(&mut results, &prepared.query, &data.popularity);
             let (final_results, total, knowledge_panel) =
-                search_page(results, query.limit, query.offset);
+                search_page(results, prepared.limit, prepared.offset);
             HttpResponse::Ok().json(SearchResult {
                 total,
                 results: final_results,
@@ -94,6 +120,23 @@ async fn search(query: web::Query<SearchQuery>, data: web::Data<AppState>) -> im
             error: error.to_string(),
         }),
     }
+}
+
+fn prepare_search_query(query: &SearchQuery) -> Result<PreparedSearch, &'static str> {
+    let text = query.query.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.is_empty() {
+        return Err("query must not be empty");
+    }
+    let limit = query.limit.min(MAX_SEARCH_LIMIT);
+    let offset = query.offset.min(MAX_SEARCH_OFFSET);
+    Ok(PreparedSearch {
+        query: text,
+        limit,
+        offset,
+        candidate_limit: limit
+            .saturating_add(offset)
+            .saturating_mul(SEARCH_PREFETCH_MULTIPLIER),
+    })
 }
 
 fn search_page(
@@ -548,6 +591,36 @@ mod tests {
                 tags: vec!["rust".to_string()],
                 categories: vec![],
             })
+        );
+    }
+
+    #[test]
+    fn prepares_search_query_for_retrieval() {
+        let prepared = prepare_search_query(&SearchQuery {
+            query: "  rust   web\tcrawler  ".to_string(),
+            limit: 500,
+            offset: 500,
+        })
+        .unwrap();
+
+        assert_eq!(prepared.query, "rust web crawler");
+        assert_eq!(prepared.limit, MAX_SEARCH_LIMIT);
+        assert_eq!(prepared.offset, MAX_SEARCH_OFFSET);
+        assert_eq!(
+            prepared.candidate_limit,
+            (MAX_SEARCH_LIMIT + MAX_SEARCH_OFFSET) * SEARCH_PREFETCH_MULTIPLIER
+        );
+    }
+
+    #[test]
+    fn rejects_blank_search_query() {
+        assert!(
+            prepare_search_query(&SearchQuery {
+                query: " \n\t ".to_string(),
+                limit: 10,
+                offset: 0,
+            })
+            .is_err()
         );
     }
 }

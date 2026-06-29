@@ -54,6 +54,8 @@ Crawl a website starting from a given URL and index the pages into Qdrant.
 - When `use_browser` is `true`, all pages are fetched using a headless Chromium browser
 - When `use_browser` is `false` (default), HTTP client is used with automatic browser fallback for JS-rendered pages
 - The `wait_for_selector` option is useful for SPAs where content loads asynchronously
+- `SPIDER_BROWSER_MAX_PAGES` limits concurrent Chromium pages. Default `1` is recommended for 4 GB servers
+- `SPIDER_BROWSER_SETTLE_MS` waits after navigation when no selector is set. Default `1500`
 - Set environment variable `SPIDER_BROWSER_HEADLESS=false` for debugging in headful mode
 
 **Response (Success):**
@@ -113,7 +115,7 @@ curl -X POST http://localhost:8001/crawl \
 # Crawl with browser rendering (for JavaScript-heavy sites)
 curl -X POST http://localhost:8001/crawl \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://spa-app.com", "max_pages": 20, "use_browser": true}'
+  -d '{"url": "https://spa-app.com", "max_pages": 10, "max_depth": 2, "use_browser": true}'
 
 # Crawl SPA with selector waiting (wait for content to load)
 curl -X POST http://localhost:8001/crawl \

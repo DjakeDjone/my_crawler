@@ -3,7 +3,7 @@ use shared_crawler_api::WebPageChunk;
 use url::Url;
 
 use crate::{
-    extractor::{calculate_chunk_score, extract_description, extract_title},
+    extractor::{extract_description, extract_title},
     extractor_content::extract_content_blocks,
     web_visitor::extract_links,
 };
@@ -32,10 +32,7 @@ pub fn extract_page(url: &Url, html: &str) -> ExtractedPage {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
-    let mut chunks = create_chunks(blocks, url.as_str(), &title, &description, crawled_at);
-    for chunk in &mut chunks {
-        chunk.score = calculate_chunk_score(chunk);
-    }
+    let chunks = create_chunks(blocks, url.as_str(), &title, &description, crawled_at);
     ExtractedPage {
         chunks,
         links: extract_links(&document, url),

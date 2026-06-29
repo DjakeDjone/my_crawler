@@ -3,12 +3,14 @@ use chromiumoxide::browser::{Browser, BrowserConfig};
 use futures::StreamExt;
 use std::env;
 use std::sync::Arc;
-use tokio::sync::OnceCell;
+use tokio::sync::{OnceCell, Semaphore};
 
 static BROWSER_POOL: OnceCell<Arc<BrowserPool>> = OnceCell::const_new();
 
 pub struct BrowserPool {
     browser: Arc<Browser>,
+    pages: Arc<Semaphore>,
+    settle_ms: u64,
 }
 
 impl BrowserPool {
@@ -50,7 +52,13 @@ impl BrowserPool {
             }
         });
 
-        Ok(BrowserPool { browser })
+        Ok(BrowserPool {
+            browser,
+            pages: Arc::new(Semaphore::new(
+                env_usize("SPIDER_BROWSER_MAX_PAGES", 1).max(1),
+            )),
+            settle_ms: env_u64("SPIDER_BROWSER_SETTLE_MS", 1_500),
+        })
     }
 
     async fn get() -> Arc<Self> {
@@ -83,6 +91,12 @@ impl BrowserPool {
         wait_for_selector: Option<&str>,
         timeout_ms: u64,
     ) -> Result<String> {
+        // ponytail: one Chromium page by default; raise SPIDER_BROWSER_MAX_PAGES only after measuring RAM.
+        let _permit = self
+            .pages
+            .acquire()
+            .await
+            .context("browser limiter closed")?;
         let page = self
             .browser
             .new_page("about:blank")
@@ -117,6 +131,8 @@ impl BrowserPool {
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
+            } else if self.settle_ms > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(self.settle_ms)).await;
             }
             page.content()
                 .await
@@ -134,5 +150,36 @@ impl BrowserPool {
                 Err(error)
             }
         }
+    }
+}
+
+fn env_usize(name: &str, default: usize) -> usize {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
+}
+
+fn env_u64(name: &str, default: u64) -> u64 {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_browser_limits_from_env() {
+        env::set_var("SPIDER_BROWSER_MAX_PAGES_TEST", "2");
+        env::set_var("SPIDER_BROWSER_SETTLE_MS_TEST", "750");
+
+        assert_eq!(env_usize("SPIDER_BROWSER_MAX_PAGES_TEST", 1), 2);
+        assert_eq!(env_u64("SPIDER_BROWSER_SETTLE_MS_TEST", 1_500), 750);
+
+        env::remove_var("SPIDER_BROWSER_MAX_PAGES_TEST");
+        env::remove_var("SPIDER_BROWSER_SETTLE_MS_TEST");
     }
 }
