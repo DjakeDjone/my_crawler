@@ -117,6 +117,11 @@ async fn crawl_request(
     let mut visited = HashSet::new();
     let mut blocked_origins = HashSet::new();
     let mut pages = 0usize;
+    let mut indexed = 0usize;
+    let mut skipped_depth = 0usize;
+    let mut skipped_robots = 0usize;
+    let mut blocked = 0usize;
+    let mut failed = 0usize;
 
     let seed_policy = robots.policy(&seed).await;
     if seed_policy.allowed {
@@ -136,6 +141,7 @@ async fn crawl_request(
         queued.remove(item.url.as_str());
         if pages >= request.max_pages || item.depth > request.max_depth {
             if item.depth > request.max_depth {
+                skipped_depth += 1;
                 stats.inc_skipped_depth();
             }
             continue;
@@ -150,6 +156,7 @@ async fn crawl_request(
 
         let policy = robots.policy(&item.url).await;
         if !policy.allowed {
+            skipped_robots += 1;
             stats.inc_skipped_robots();
             continue;
         }
@@ -175,6 +182,7 @@ async fn crawl_request(
         let (final_url, mut html) = match fetched {
             Ok(value) => value,
             Err(FetchError::Blocked(value)) => {
+                blocked += 1;
                 if let Ok(url) = Url::parse(&value) {
                     if let Some(origin) = origin(&url) {
                         blocked_origins.insert(origin);
@@ -184,6 +192,7 @@ async fn crawl_request(
             }
             Err(error) => {
                 tracing::warn!("runner[{id}] failed {}: {error}", item.url);
+                failed += 1;
                 stats.inc_failed();
                 continue;
             }
@@ -207,9 +216,14 @@ async fn crawl_request(
         let extracted = extract_page(&final_url, &html);
         pages += 1;
         stats.inc_crawled();
+        let has_chunks = !extracted.chunks.is_empty();
         if let Err(error) = indexer.index_page(&extracted.chunks).await {
             tracing::warn!("failed to index {final_url}: {error}");
+            failed += 1;
             stats.inc_failed();
+        } else if has_chunks {
+            indexed += 1;
+            stats.inc_indexed();
         }
 
         for link in extracted.links {
@@ -221,6 +235,20 @@ async fn crawl_request(
             }
         }
     }
+    tracing::info!(
+        "runner[{id}] finished crawl seed={} crawled={} indexed={} visited={} skipped_robots={} skipped_depth={} blocked={} failed={} max_pages={} max_depth={} same_domain={}",
+        seed,
+        pages,
+        indexed,
+        visited.len(),
+        skipped_robots,
+        skipped_depth,
+        blocked,
+        failed,
+        request.max_pages,
+        request.max_depth,
+        request.same_domain,
+    );
 }
 
 fn enqueue(

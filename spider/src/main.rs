@@ -79,6 +79,7 @@ async fn status(app_state: web::Data<AppState>) -> impl Responder {
         "status": "ok",
         "queue_size": queue_size,
         "pages_crawled": stats.pages_crawled,
+        "pages_indexed": stats.pages_indexed,
         "pages_failed": stats.pages_failed,
         "pages_skipped_robots": stats.pages_skipped_robots,
         "pages_skipped_depth": stats.pages_skipped_depth,

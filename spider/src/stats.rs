@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[derive(Default)]
 pub struct CrawlStats {
     pub pages_crawled: AtomicUsize,
+    pub pages_indexed: AtomicUsize,
     pub pages_failed: AtomicUsize,
     pub pages_skipped_robots: AtomicUsize,
     pub pages_skipped_depth: AtomicUsize,
@@ -22,6 +23,10 @@ impl CrawlStats {
 
     pub fn inc_crawled(&self) {
         self.pages_crawled.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_indexed(&self) {
+        self.pages_indexed.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn inc_failed(&self) {
@@ -40,6 +45,7 @@ impl CrawlStats {
     pub fn snapshot(&self) -> StatsSnapshot {
         StatsSnapshot {
             pages_crawled: self.pages_crawled.load(Ordering::Relaxed),
+            pages_indexed: self.pages_indexed.load(Ordering::Relaxed),
             pages_failed: self.pages_failed.load(Ordering::Relaxed),
             pages_skipped_robots: self.pages_skipped_robots.load(Ordering::Relaxed),
             pages_skipped_depth: self.pages_skipped_depth.load(Ordering::Relaxed),
@@ -52,6 +58,7 @@ impl CrawlStats {
 #[derive(Serialize, Clone)]
 pub struct StatsSnapshot {
     pub pages_crawled: usize,
+    pub pages_indexed: usize,
     pub pages_failed: usize,
     pub pages_skipped_robots: usize,
     pub pages_skipped_depth: usize,
