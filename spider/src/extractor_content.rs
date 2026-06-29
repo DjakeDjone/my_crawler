@@ -17,12 +17,12 @@ fn walk(
             continue;
         }
         if matches!(name, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
-            let text = clean_text(child.text());
+            let text = clean_text(&child);
             if !text.is_empty() {
                 heading = Some(text);
             }
         } else if matches!(name, "p" | "li" | "pre" | "blockquote" | "td" | "th") {
-            let text = clean_text(child.text());
+            let text = clean_text(&child);
             if !text.is_empty() {
                 blocks.push(ContentBlock {
                     heading: heading.clone(),
@@ -38,11 +38,26 @@ fn walk(
     (blocks, heading)
 }
 
-fn clean_text<'a>(parts: impl Iterator<Item = &'a str>) -> String {
+fn clean_text(element: &ElementRef<'_>) -> String {
+    let mut parts = Vec::new();
+    collect_text(*element, &mut parts);
     parts
+        .into_iter()
         .flat_map(str::split_whitespace)
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn collect_text<'a>(element: ElementRef<'a>, parts: &mut Vec<&'a str>) {
+    for child in element.children() {
+        if let Some(child) = ElementRef::wrap(child) {
+            if !is_excluded(&child) {
+                collect_text(child, parts);
+            }
+        } else if let Some(text) = child.value().as_text() {
+            parts.push(text);
+        }
+    }
 }
 
 fn is_excluded(element: &ElementRef<'_>) -> bool {
@@ -78,5 +93,15 @@ mod tests {
             ["One", "Two", "Three"]
         );
         assert!(blocks.iter().all(|b| b.heading.as_deref() == Some("Title")));
+    }
+
+    #[test]
+    fn ignores_nested_style_text() {
+        let document = Html::parse_document(
+            "<table><tr><td>WP:SHORTCUTS<style>.mw-parser-output .hlist{margin:0}</style></td></tr></table>",
+        );
+        let blocks = extract_content_blocks(&document);
+
+        assert_eq!(blocks[0].text, "WP:SHORTCUTS");
     }
 }
